@@ -301,19 +301,12 @@ SELECT
     WHEN (fee->>'gasLimit')::bigint < 500000 THEN '250k-500k'
     WHEN (fee->>'gasLimit')::bigint < 1000000 THEN '500k-1M'
     ELSE '1M+'
-  END AS range,
+  END AS gas_range,
   COUNT(*) AS count
 FROM api.transactions_main
 WHERE fee->>'gasLimit' IS NOT NULL
-GROUP BY range
-ORDER BY
-  CASE range
-    WHEN '0-100k' THEN 1
-    WHEN '100k-250k' THEN 2
-    WHEN '250k-500k' THEN 3
-    WHEN '500k-1M' THEN 4
-    ELSE 5
-  END;
+GROUP BY 1
+ORDER BY MIN((fee->>'gasLimit')::bigint);
 
 -- Transaction success rate
 CREATE OR REPLACE VIEW api.tx_success_rate AS
