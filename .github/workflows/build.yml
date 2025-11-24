@@ -10,10 +10,31 @@ on:
 
 jobs:
   build:
-    name: Build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build Docker image
-        run: docker build -t yaci-postgrest:test .
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'yarn'
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Type check
+        run: yarn typecheck
+
+      - name: Validate migrations
+        run: |
+          if [ -d "migrations" ]; then
+            echo "Checking migration files..."
+            for f in migrations/*.sql; do
+              if [ -f "$f" ]; then
+                echo "Validating $f"
+                grep -q "BEGIN;" "$f" || echo "Warning: $f missing BEGIN"
+                grep -q "COMMIT;" "$f" || echo "Warning: $f missing COMMIT"
+              fi
+            done
+          fi

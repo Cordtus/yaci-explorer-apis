@@ -1,0 +1,25 @@
+# fly.toml for EVM decode worker process
+
+app = 'yaci-evm-decoder'
+primary_region = 'sjc'
+
+[build]
+  dockerfile = "docker/Dockerfile.worker"
+
+[env]
+  POLL_INTERVAL_MS = '5000'
+  BATCH_SIZE = '100'
+
+[deploy]
+  strategy = 'immediate'
+
+[[vm]]
+  memory = '512mb'
+  cpu_kind = 'shared'
+  cpus = 1
+
+[checks]
+  [checks.alive]
+    type = "tcp"
+    interval = "30s"
+    timeout = "10s"

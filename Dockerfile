@@ -1,7 +1,0 @@
-FROM postgrest/postgrest:v12.2.3
-
-ENV PGRST_DB_ANON_ROLE="web_anon"
-ENV PGRST_DB_SCHEMAS="api"
-ENV PGRST_SERVER_PORT=3000
-
-EXPOSE 3000

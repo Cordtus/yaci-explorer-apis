@@ -1,2 +1,8 @@
 .env
 *.log
+node_modules/
+dist/
+
+# Internal/development docs
+CLAUDE.md
+MIGRATION_PLAN.md

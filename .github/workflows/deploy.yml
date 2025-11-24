@@ -8,7 +8,7 @@ on:
 
 jobs:
   deploy:
-    name: Deploy PostgREST
+    name: Deploy Middleware
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
