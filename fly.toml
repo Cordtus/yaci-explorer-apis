@@ -15,10 +15,13 @@ primary_region = 'sjc'
   PGRST_SERVER_PORT = '3000'
   POLL_INTERVAL_MS = '5000'
   BATCH_SIZE = '100'
+  GOV_POLL_INTERVAL_MS = '60000'
+  GOV_SNAPSHOT_INTERVAL_MS = '300000'
 
 [processes]
   app = "/usr/local/bin/postgrest"
   worker = "npx tsx scripts/decode-evm-daemon.ts"
+  gov_worker = "npx tsx workers/governance-poller.ts"
 
 [http_service]
   internal_port = 3000
@@ -45,4 +48,4 @@ primary_region = 'sjc'
   memory = '512mb'
   cpu_kind = 'shared'
   cpus = 1
-  processes = ['worker']
+  processes = ['worker', 'gov_worker']
