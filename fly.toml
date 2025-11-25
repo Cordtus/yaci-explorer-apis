@@ -17,7 +17,6 @@ primary_region = 'sjc'
   BATCH_SIZE = '100'
   GOV_POLL_INTERVAL_MS = '60000'
   GOV_SNAPSHOT_INTERVAL_MS = '300000'
-  EVM_DECODE_PORT = '3001'
 
 [processes]
   app = "/usr/local/bin/postgrest"

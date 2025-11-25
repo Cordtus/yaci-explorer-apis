@@ -1,14 +1,12 @@
 /**
- * On-demand EVM Transaction Decoder
- * Provides HTTP endpoint for immediate EVM transaction decoding
+ * Priority EVM Transaction Decoder
+ * Listens for PostgreSQL notifications to decode EVM transactions on-demand
  */
 
 import pg from 'pg'
 import { Transaction, hexlify, keccak256, getAddress } from 'ethers'
-import { createServer } from 'http'
 
 const DATABASE_URL = process.env.DATABASE_URL
-const PORT = parseInt(process.env.EVM_DECODE_PORT || '3001')
 
 interface DecodedTx {
   tx_id: string
@@ -190,52 +188,42 @@ async function decodeSingleTransaction(txId: string): Promise<{
   }
 }
 
-const server = createServer(async (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*')
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
+async function startPriorityListener() {
+  console.log('[Priority EVM Decoder] Starting...')
+  console.log('[Priority EVM Decoder] Listening for evm_decode_priority notifications')
 
-  if (req.method === 'OPTIONS') {
-    res.writeHead(200)
-    res.end()
-    return
-  }
+  const client = await pool.connect()
 
-  if (req.method === 'POST' && req.url === '/decode') {
-    let body = ''
-    req.on('data', chunk => {
-      body += chunk.toString()
-    })
-    req.on('end', async () => {
-      try {
-        const { txId } = JSON.parse(body)
-        if (!txId) {
-          res.writeHead(400, { 'Content-Type': 'application/json' })
-          res.end(JSON.stringify({ success: false, message: 'txId required' }))
-          return
+  try {
+    await client.query('LISTEN evm_decode_priority')
+
+    client.on('notification', async (msg) => {
+      if (msg.channel === 'evm_decode_priority') {
+        const txId = msg.payload
+        if (!txId) return
+
+        console.log(`[Priority EVM Decoder] Received request for ${txId}`)
+
+        try {
+          const result = await decodeSingleTransaction(txId)
+          if (result.success) {
+            console.log(`[Priority EVM Decoder] Successfully decoded ${txId}`)
+          } else {
+            console.log(`[Priority EVM Decoder] Failed to decode ${txId}: ${result.message}`)
+          }
+        } catch (err) {
+          console.error(`[Priority EVM Decoder] Error processing ${txId}:`, err)
         }
-
-        const result = await decodeSingleTransaction(txId)
-        res.writeHead(result.success ? 200 : 400, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify(result))
-      } catch (err) {
-        res.writeHead(500, { 'Content-Type': 'application/json' })
-        res.end(
-          JSON.stringify({
-            success: false,
-            message: err instanceof Error ? err.message : 'Server error',
-          })
-        )
       }
     })
-  } else if (req.method === 'GET' && req.url === '/health') {
-    res.writeHead(200, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ status: 'ok' }))
-  } else {
-    res.writeHead(404, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ success: false, message: 'Not found' }))
+
+    console.log('[Priority EVM Decoder] Ready to process priority decode requests')
+  } catch (err) {
+    console.error('[Priority EVM Decoder] Failed to start:', err)
+    client.release()
+    throw err
   }
-})
+}
 
 if (require.main === module) {
   if (!DATABASE_URL) {
@@ -243,26 +231,21 @@ if (require.main === module) {
     process.exit(1)
   }
 
-  server.listen(PORT, () => {
-    console.log(`[EVM Decode API] Listening on port ${PORT}`)
-    console.log(`[EVM Decode API] POST /decode with {"txId": "..."} to decode`)
-    console.log(`[EVM Decode API] GET /health for health check`)
+  startPriorityListener().catch((err) => {
+    console.error('[Priority EVM Decoder] Fatal error:', err)
+    process.exit(1)
   })
 
-  process.on('SIGINT', () => {
-    console.log('\n[EVM Decode API] Shutting down...')
-    server.close(() => {
-      pool.end()
-      process.exit(0)
-    })
+  process.on('SIGINT', async () => {
+    console.log('\n[Priority EVM Decoder] Shutting down...')
+    await pool.end()
+    process.exit(0)
   })
 
-  process.on('SIGTERM', () => {
-    console.log('\n[EVM Decode API] Shutting down...')
-    server.close(() => {
-      pool.end()
-      process.exit(0)
-    })
+  process.on('SIGTERM', async () => {
+    console.log('\n[Priority EVM Decoder] Shutting down...')
+    await pool.end()
+    process.exit(0)
   })
 }
 
