@@ -225,12 +225,8 @@ async function startPriorityListener() {
   }
 }
 
-if (require.main === module) {
-  if (!DATABASE_URL) {
-    console.error('DATABASE_URL environment variable is required')
-    process.exit(1)
-  }
-
+// Auto-start listener when script is run directly
+if (DATABASE_URL) {
   startPriorityListener().catch((err) => {
     console.error('[Priority EVM Decoder] Fatal error:', err)
     process.exit(1)
@@ -247,6 +243,9 @@ if (require.main === module) {
     await pool.end()
     process.exit(0)
   })
+} else {
+  console.error('[Priority EVM Decoder] DATABASE_URL environment variable is required')
+  process.exit(1)
 }
 
 export { decodeSingleTransaction }
