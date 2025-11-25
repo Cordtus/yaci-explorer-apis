@@ -222,8 +222,8 @@ async function processBatch(pool: pg.Pool, root: protobuf.Root): Promise<number>
 				}
 			}
 
-			// Lookup function signature if we have call data
-			if (decoded.data && decoded.data.length >= 10) {
+			// Lookup function signature if we have call data (skip for contract deployments)
+			if (decoded.to !== null && decoded.data && decoded.data.length >= 10) {
 				const selector = decoded.data.slice(0, 10)
 				const signature = await fetch4ByteSignature(selector)
 				if (signature) {
