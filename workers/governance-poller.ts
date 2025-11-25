@@ -55,8 +55,29 @@ class GovernancePoller {
     this.pool = new pg.Pool({ connectionString: DATABASE_URL })
   }
 
+  async checkTablesExist(): Promise<boolean> {
+    try {
+      const result = await this.pool.query(`
+        SELECT EXISTS (
+          SELECT 1 FROM information_schema.tables
+          WHERE table_schema = 'api' AND table_name = 'governance_proposals'
+        ) AS exists
+      `)
+      return result.rows[0]?.exists === true
+    } catch {
+      return false
+    }
+  }
+
   async pollActiveProposals() {
     console.log('[Governance Poller] Starting poll cycle...')
+
+    // Check if governance tables exist
+    const tablesExist = await this.checkTablesExist()
+    if (!tablesExist) {
+      console.log('[Governance Poller] Governance tables not yet created, skipping cycle')
+      return
+    }
 
     const result = await this.pool.query<ActiveProposal>(
       'SELECT * FROM api.governance_active_proposals'
