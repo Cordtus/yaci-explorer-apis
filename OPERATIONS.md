@@ -8,16 +8,16 @@ This document provides comprehensive coverage of the YACI Explorer three-compone
 
 The YACI Explorer stack consists of three specialized components working in concert to provide blockchain data indexing, processing, and visualization:
 
-**1. Yaci Indexer** (github.com/Cordtus/yaci)
+**1. Yaci Indexer** (github.com/dyphira-git/yaci)
 - Go-based blockchain data extraction engine
 - Connects directly to Cosmos SDK chain gRPC endpoints
 - Continuously polls for new blocks and transactions
 - Stores raw blockchain data as JSON in PostgreSQL
-- Handles resume logic via `SELECT COALESCE(MAX(id), 0) FROM api.blocks_raw`
+- Handles resume logic via `SELECT id FROM api.blocks_raw ORDER BY id DESC LIMIT 1`
 - Configurable concurrency and retry mechanisms
 - DO NOT MODIFY - external dependency maintained separately
 
-**2. Middleware Layer** (github.com/Cordtus/yaci-explorer-apis)
+**2. Middleware Layer** (github.com/dyphira-git/yaci-explorer-apis)
 - Three-process architecture on Fly.io:
   - `app`: PostgREST API server (port 3000)
   - `worker`: EVM decode daemon (batch processing)
@@ -31,7 +31,7 @@ The YACI Explorer stack consists of three specialized components working in conc
 - TypeScript client package for type-safe API consumption
 - All business logic lives here - never in frontend or indexer
 
-**3. Frontend Application** (github.com/Cordtus/yaci-explorer)
+**3. Frontend Application** (github.com/dyphira-git/yaci-explorer)
 - React Router 7 client-only application (SSR disabled)
 - TanStack Query manages server state with intelligent caching
 - Radix UI components with Tailwind CSS styling
@@ -111,9 +111,9 @@ YACI_GRPC_ENDPOINT=rpc.example.com:9090
 YACI_POSTGRES_DSN=postgres://yaci_writer:password@host:5432/postgres
 
 # Optional
-YACI_START=1                    # Override start height (default: resume from MAX(id))
-YACI_CONCURRENCY=5             # Concurrent gRPC requests (default: 5)
-YACI_BLOCK_TIME=2s             # Polling interval (default: 2s)
+YACI_START=0                    # Override start height (default: resume from MAX(id), 0 means auto)
+YACI_MAX_CONCURRENCY=100       # Maximum block retrieval concurrency (default: 100, Docker default: 5)
+YACI_BLOCK_TIME=2              # Polling interval in seconds (default: 2)
 YACI_MAX_RETRIES=3             # Connection retry attempts (default: 3)
 YACI_INSECURE=false            # Disable TLS (default: false)
 YACI_LOGLEVEL=info             # Log level (default: info)
@@ -206,12 +206,12 @@ Recommended settings for shared-cpu-1x (25 connection limit):
 PGRST_DB_POOL=5              # 10 connections total
 
 # Indexer
-YACI_MAX_CONNECTIONS=3       # 3 connections
+# Uses pgxpool connection pool (managed internally by pgx driver)
 
 # Worker
-DATABASE_POOL_SIZE=1         # 1 connection
+# Uses single pg.Pool connection
 
-# Total: 14 connections (11 remaining for admin/monitoring)
+# Total: ~14 connections (11 remaining for admin/monitoring)
 ```
 
 **Monitoring Connection Usage**
@@ -273,6 +273,7 @@ WHERE state = 'idle'
 - `api.evm_logs`: Event logs with topics and data
 - `api.evm_token_transfers`: Parsed ERC-20/721 transfers
 - `api.evm_tokens`: Token metadata cache
+- `api.evm_contracts`: Contract metadata, ABI, and source code storage
 
 **Analytics Views and Materialized Views:**
 - `api.mv_daily_tx_stats`: Daily transaction counts, success/fail, unique senders (materialized)
@@ -557,7 +558,7 @@ fly postgres connect -a republic-yaci-pg -c "
 SELECT
   MAX(id) as latest_block,
   COUNT(*) as total_blocks,
-  MAX(data->>'time') as latest_block_time
+  MAX(data->'block'->'header'->>'time') as latest_block_time
 FROM api.blocks_raw;
 "
 
@@ -1047,7 +1048,7 @@ watch -n 30 'fly postgres connect -a republic-yaci-pg -c "
 SELECT
   MAX(id) as current_block,
   COUNT(*) as total_blocks,
-  MAX(data->>\"time\") as latest_time
+  MAX(data->\"block\"->\"header\"->>\"time\") as latest_time
 FROM api.blocks_raw;
 "'
 ```
@@ -1067,10 +1068,10 @@ Example re-indexing times:
 **Optimization for Faster Re-indexing:**
 ```bash
 # Increase indexer concurrency
-fly secrets set YACI_CONCURRENCY=10 -a republic-yaci-indexer
+fly secrets set YACI_MAX_CONCURRENCY=10 -a republic-yaci-indexer
 
 # Reduce block time for faster polling
-fly secrets set YACI_BLOCK_TIME=1s -a republic-yaci-indexer
+fly secrets set YACI_BLOCK_TIME=1 -a republic-yaci-indexer
 
 # Temporarily disable triggers during bulk re-index
 fly postgres connect -a republic-yaci-pg -c "
@@ -1388,9 +1389,9 @@ fly postgres update --vm-size shared-cpu-2x -a republic-yaci-pg
 
 ```bash
 # Clone all three repositories
-git clone https://github.com/Cordtus/yaci.git
-git clone https://github.com/Cordtus/yaci-explorer-apis.git
-git clone https://github.com/Cordtus/yaci-explorer.git
+git clone https://github.com/dyphira-git/yaci.git
+git clone https://github.com/dyphira-git/yaci-explorer-apis.git
+git clone https://github.com/dyphira-git/yaci-explorer.git
 
 # Start local PostgreSQL
 docker run -d \
@@ -1404,9 +1405,8 @@ cat yaci-explorer-apis/migrations/*.sql | psql postgres://postgres:foobar@localh
 
 # Run indexer locally
 cd yaci
-export YACI_POSTGRES_DSN="postgres://postgres:foobar@localhost/postgres"
-export YACI_GRPC_ENDPOINT="testnet.example.com:9090"
-go run main.go extract postgres
+go run main.go extract postgres testnet.example.com:9090 \
+  -p "postgres://postgres:foobar@localhost/postgres" --live
 
 # Run middleware locally
 cd yaci-explorer-apis
@@ -1497,7 +1497,7 @@ cat migrations/004_new_feature.sql | fly postgres connect -a republic-yaci-pg
   5. Validate migration files (BEGIN/COMMIT checks)
 
 **Deploy Workflow** (.github/workflows/deploy.yml)
-- Triggers: Push to main, manual workflow_dispatch
+- Triggers: After successful build workflow on main, manual workflow_dispatch
 - Steps:
   1. Checkout code
   2. Setup flyctl
