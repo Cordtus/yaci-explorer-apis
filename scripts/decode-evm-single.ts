@@ -189,41 +189,69 @@ async function decodeSingleTransaction(txId: string): Promise<{
   }
 }
 
+let listenerClient: pg.PoolClient | null = null
+let reconnectTimeout: NodeJS.Timeout | null = null
+
 async function startPriorityListener() {
   console.log('[Priority EVM Decoder] Starting...')
-  console.log('[Priority EVM Decoder] Listening for evm_decode_priority notifications')
 
-  const client = await pool.connect()
+  async function connect() {
+    try {
+      listenerClient = await pool.connect()
+      console.log('[Priority EVM Decoder] Listening for evm_decode_priority notifications')
 
-  try {
-    await client.query('LISTEN evm_decode_priority')
+      await listenerClient.query('LISTEN evm_decode_priority')
 
-    client.on('notification', async (msg) => {
-      if (msg.channel === 'evm_decode_priority') {
-        const txId = msg.payload
-        if (!txId) return
+      listenerClient.on('notification', async (msg) => {
+        if (msg.channel === 'evm_decode_priority') {
+          const txId = msg.payload
+          if (!txId) return
 
-        console.log(`[Priority EVM Decoder] Received request for ${txId}`)
+          console.log(`[Priority EVM Decoder] Received request for ${txId}`)
 
-        try {
-          const result = await decodeSingleTransaction(txId)
-          if (result.success) {
-            console.log(`[Priority EVM Decoder] Decoded ${txId}`)
-          } else {
-            console.log(`[Priority EVM Decoder] Failed ${txId}: ${result.message}`)
+          try {
+            const result = await decodeSingleTransaction(txId)
+            if (result.success) {
+              console.log(`[Priority EVM Decoder] Decoded ${txId}`)
+            } else {
+              console.log(`[Priority EVM Decoder] Failed ${txId}: ${result.message}`)
+            }
+          } catch (err) {
+            console.error(`[Priority EVM Decoder] Error processing ${txId}:`, err)
           }
-        } catch (err) {
-          console.error(`[Priority EVM Decoder] Error processing ${txId}:`, err)
         }
-      }
-    })
+      })
 
-    console.log('[Priority EVM Decoder] Ready')
-  } catch (err) {
-    console.error('[Priority EVM Decoder] Failed to start:', err)
-    client.release()
-    throw err
+      listenerClient.on('error', (err) => {
+        console.error('[Priority EVM Decoder] Connection error:', err.message)
+        scheduleReconnect()
+      })
+
+      listenerClient.on('end', () => {
+        console.log('[Priority EVM Decoder] Connection ended')
+        scheduleReconnect()
+      })
+
+      console.log('[Priority EVM Decoder] Ready')
+    } catch (err) {
+      console.error('[Priority EVM Decoder] Failed to connect:', err)
+      scheduleReconnect()
+    }
   }
+
+  function scheduleReconnect() {
+    if (reconnectTimeout) return
+    if (shuttingDown) return
+
+    listenerClient = null
+    console.log('[Priority EVM Decoder] Reconnecting in 5 seconds...')
+    reconnectTimeout = setTimeout(() => {
+      reconnectTimeout = null
+      connect()
+    }, 5000)
+  }
+
+  await connect()
 }
 
 // Start listener
@@ -243,6 +271,12 @@ async function shutdown() {
   if (shuttingDown) return
   shuttingDown = true
   console.log('\n[Priority EVM Decoder] Shutting down...')
+  if (reconnectTimeout) {
+    clearTimeout(reconnectTimeout)
+  }
+  if (listenerClient) {
+    listenerClient.release()
+  }
   await pool.end()
   process.exit(0)
 }
