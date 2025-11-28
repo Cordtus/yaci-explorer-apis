@@ -21,7 +21,7 @@ export interface PaginatedResponse<T> {
 
 export interface Transaction {
 	id: string
-	fee: TransactionFee
+	fee: TransactionFee | null
 	memo: string | null
 	error: string | null
 	height: number
@@ -34,6 +34,7 @@ export interface Transaction {
 
 export interface TransactionDetail extends Transaction {
 	evm_data: EvmData | null
+	evm_logs: EvmLog[]
 	raw_data: unknown
 }
 
@@ -57,6 +58,7 @@ export interface Message {
 	sender: string | null
 	mentions: string[]
 	metadata: Record<string, unknown>
+	data?: Record<string, unknown>
 }
 
 // Events
@@ -74,10 +76,29 @@ export interface Event {
 // EVM
 
 export interface EvmData {
-	ethereum_tx_hash: string | null
-	recipient: string | null
-	gas_used: number | null
-	tx_type: number | null
+	hash: string
+	from: string
+	to: string | null
+	nonce: number
+	gasLimit: string
+	gasPrice: string
+	maxFeePerGas: string | null
+	maxPriorityFeePerGas: string | null
+	value: string
+	data: string | null
+	type: number
+	chainId: string | null
+	gasUsed: number | null
+	status: number
+	functionName: string | null
+	functionSignature: string | null
+}
+
+export interface EvmLog {
+	logIndex: number
+	address: string
+	topics: string[]
+	data: string
 }
 
 // Address
@@ -87,8 +108,6 @@ export interface AddressStats {
 	transaction_count: number
 	first_seen: string | null
 	last_seen: string | null
-	total_sent: number
-	total_received: number
 }
 
 // Chain Stats
@@ -97,9 +116,7 @@ export interface ChainStats {
 	latest_block: number
 	total_transactions: number
 	unique_addresses: number
-	avg_block_time: number
-	min_block_time: number
-	max_block_time: number
+	evm_transactions: number
 	active_validators: number
 }
 
@@ -155,6 +172,7 @@ export interface GovernanceProposal {
 		no_with_veto: string | null
 	}
 	last_updated: string
+	last_snapshot_time: string | null
 }
 
 export interface ProposalSnapshot {
@@ -165,4 +183,25 @@ export interface ProposalSnapshot {
 	abstain_count: string
 	no_with_veto_count: string
 	snapshot_time: string
+}
+
+// Token types
+
+export interface EvmToken {
+	address: string
+	name: string | null
+	symbol: string | null
+	decimals: number | null
+	type: 'ERC20' | 'ERC721' | 'ERC1155'
+	total_supply: string | null
+	verified: boolean
+}
+
+export interface EvmTokenTransfer {
+	tx_id: string
+	log_index: number
+	token_address: string
+	from_address: string
+	to_address: string
+	value: string
 }

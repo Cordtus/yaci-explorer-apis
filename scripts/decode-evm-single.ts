@@ -171,7 +171,8 @@ async function decodeSingleTransaction(txId: string): Promise<{
       ]
     )
 
-    await client.query(`DELETE FROM api.evm_pending_decode WHERE tx_id = $1`, [txId])
+    // Note: No need to delete from evm_pending_decode - it's a VIEW that automatically
+    // excludes transactions once they exist in evm_transactions
 
     await client.query('COMMIT')
 
