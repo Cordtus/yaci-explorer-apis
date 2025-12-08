@@ -17,7 +17,7 @@ primary_region = 'sjc'
   BATCH_SIZE = '100'
 
 [processes]
-  app = "/usr/local/bin/postgrest"
+  app = "npx tsx scripts/api-gateway.ts"
   worker = "npx tsx scripts/decode-evm-daemon.ts"
   priority_decoder = "npx tsx scripts/decode-evm-single.ts"
 

@@ -15,6 +15,7 @@
 		"test:evm-hash-lookup": "npx tsx scripts/test-evm-hash-lookup.ts"
 	},
 	"dependencies": {
+		"@grpc/grpc-js": "^1.12.0",
 		"ethers": "^6.15.0",
 		"pg": "^8.13.0",
 		"protobufjs": "^7.4.0"
