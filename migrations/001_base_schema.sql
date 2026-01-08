@@ -1853,6 +1853,15 @@ BEGIN
 END
 $$;
 
+-- Create web_anon role for PostgREST read-only access
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'web_anon') THEN
+    CREATE ROLE web_anon NOLOGIN;
+  END IF;
+END
+$$;
+
 -- Grant read access to all tables and views
 GRANT SELECT ON ALL TABLES IN SCHEMA api TO web_anon;
 GRANT USAGE ON SCHEMA api TO web_anon;
