@@ -1156,14 +1156,21 @@ END;
 $$;
 
 -- Get transaction detail with EVM data (with priority decode trigger)
+-- Accepts either Cosmos tx hash or EVM tx hash (0x-prefixed)
 CREATE OR REPLACE FUNCTION api.get_transaction_detail(_hash text)
 RETURNS jsonb
 LANGUAGE plpgsql STABLE
 AS $$
 DECLARE
   result jsonb;
+  resolved_hash text;
 BEGIN
-  PERFORM api.maybe_priority_decode(_hash);
+  -- Resolve EVM hash to Cosmos tx_id if needed, otherwise use input directly
+  SELECT COALESCE(ev.tx_id, _hash) INTO resolved_hash
+  FROM (SELECT _hash AS input) i
+  LEFT JOIN api.evm_transactions ev ON ev.hash = lower(_hash);
+
+  PERFORM api.maybe_priority_decode(resolved_hash);
 
   SELECT jsonb_build_object(
     'id', t.id,
@@ -1195,7 +1202,7 @@ BEGIN
     ) AS messages
     FROM api.messages_main m
     LEFT JOIN api.messages_raw mr ON m.id = mr.id AND m.message_index = mr.message_index
-    WHERE m.id = _hash
+    WHERE m.id = resolved_hash
   ) msg ON TRUE
   LEFT JOIN LATERAL (
     SELECT jsonb_agg(
@@ -1210,7 +1217,7 @@ BEGIN
       ) ORDER BY e.event_index, e.attr_index
     ) AS events
     FROM api.events_main e
-    WHERE e.id = _hash
+    WHERE e.id = resolved_hash
   ) evt ON TRUE
   LEFT JOIN LATERAL (
     SELECT jsonb_build_object(
@@ -1232,7 +1239,7 @@ BEGIN
       'functionSignature', ev.function_signature
     ) AS evm
     FROM api.evm_transactions ev
-    WHERE ev.tx_id = _hash
+    WHERE ev.tx_id = resolved_hash
   ) evm ON TRUE
   LEFT JOIN LATERAL (
     SELECT jsonb_agg(
@@ -1244,9 +1251,9 @@ BEGIN
       ) ORDER BY l.log_index
     ) AS logs
     FROM api.evm_logs l
-    WHERE l.tx_id = _hash
+    WHERE l.tx_id = resolved_hash
   ) logs ON TRUE
-  WHERE t.id = _hash;
+  WHERE t.id = resolved_hash;
 
   RETURN result;
 END;
