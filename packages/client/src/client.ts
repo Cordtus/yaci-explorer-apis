@@ -189,6 +189,13 @@ export class YaciClient {
 	}
 
 	/**
+	 * Get daily active addresses (unique senders per day)
+	 */
+	async getDailyActiveAddresses(limit = 30): Promise<Array<{ date: string; active_addresses: number }>> {
+		return this.query('daily_active_addresses', { order: 'date.desc', limit: String(limit) })
+	}
+
+	/**
 	 * Get message type statistics
 	 */
 	async getMessageTypeStats(): Promise<Array<{ type: string; count: number }>> {
