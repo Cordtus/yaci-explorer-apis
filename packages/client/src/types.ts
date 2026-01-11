@@ -205,3 +205,117 @@ export interface EvmTokenTransfer {
 	to_address: string
 	value: string
 }
+
+// IBC Types
+
+export interface IbcStats {
+	outgoing_transfers: number
+	incoming_transfers: number
+	completed_transfers: number
+	timed_out_transfers: number
+	relayer_updates: number
+	total_channels: number
+	open_channels: number
+	active_channels: number
+	connected_chains: number
+	total_denoms: number
+}
+
+export interface IbcTransfer {
+	tx_hash: string
+	height: number
+	timestamp: string
+	direction: 'outgoing' | 'incoming' | 'other'
+	sender: string | null
+	receiver: string | null
+	source_channel: string | null
+	token_denom: string | null
+	token_amount: string | null
+	resolved_denom: ResolvedDenom | null
+	counterparty_chain: string | null
+	success: boolean
+}
+
+export interface ResolvedDenom {
+	denom: string
+	symbol: string
+	decimals: number
+	is_native: boolean | null
+	source_chain: string | null
+	source_denom: string | null
+}
+
+export interface IbcConnection {
+	channel_id: string
+	port_id: string
+	connection_id: string | null
+	client_id: string | null
+	counterparty_chain_id: string | null
+	counterparty_channel_id: string | null
+	counterparty_port_id: string | null
+	counterparty_client_id: string | null
+	counterparty_connection_id: string | null
+	state: string | null
+	ordering: string | null
+	client_status: string | null
+	is_active: boolean
+	updated_at: string
+}
+
+export interface IbcDenomTrace {
+	ibc_denom: string
+	base_denom: string
+	path: string
+	source_channel: string | null
+	source_chain_id: string | null
+	symbol: string | null
+	decimals: number
+	updated_at: string
+}
+
+export interface IbcDenomResolution {
+	ibc_denom: string
+	base_denom: string
+	path: string
+	source_channel: string | null
+	source_chain_id: string | null
+	symbol: string | null
+	decimals: number
+	route: {
+		channel_id: string | null
+		connection_id: string | null
+		client_id: string | null
+		counterparty_channel_id: string | null
+		counterparty_connection_id: string | null
+		counterparty_client_id: string | null
+	}
+}
+
+export interface IbcChainSummary {
+	chain_id: string
+	channel_count: number
+	open_channels: number
+	active_channels: number
+}
+
+export interface IbcChannelActivity {
+	channel_id: string
+	transfer_count: number
+	successful_transfers: number
+	counterparty_chain_id: string | null
+	state: string | null
+	client_status: string | null
+}
+
+export interface IbcVolumeTimeSeries {
+	hours: number
+	channel_filter: string | null
+	data: Array<{
+		hour: string
+		outgoing_count: number
+		incoming_count: number
+		outgoing_volume: number
+		incoming_volume: number
+	}>
+	channels: string[]
+}

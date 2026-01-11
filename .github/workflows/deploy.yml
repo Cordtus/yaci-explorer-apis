@@ -1,4 +1,4 @@
-name: Deploy to Fly.io
+name: Deploy to Server
 
 on:
   workflow_run:
@@ -8,6 +8,11 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to deploy'
+        required: false
+        default: 'main'
 
 jobs:
   deploy:
@@ -15,10 +20,13 @@ jobs:
     runs-on: ubuntu-latest
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: superfly/flyctl-actions/setup-flyctl@master
-
-      - run: flyctl deploy --remote-only --app yaci-explorer-apis --config fly.toml
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT }}
+          script: |
+            # Execute deploy inside yaci container
+            lxc exec yaci -- /opt/yaci-explorer-apis/scripts/deploy.sh deploy ${{ github.event.inputs.branch || 'main' }}

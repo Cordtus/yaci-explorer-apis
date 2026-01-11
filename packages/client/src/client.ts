@@ -11,7 +11,16 @@ import type {
 	ChainStats,
 	SearchResult,
 	GovernanceProposal,
-	ProposalSnapshot
+	ProposalSnapshot,
+	IbcStats,
+	IbcTransfer,
+	IbcConnection,
+	IbcDenomTrace,
+	IbcDenomResolution,
+	IbcChainSummary,
+	IbcChannelActivity,
+	IbcVolumeTimeSeries,
+	ResolvedDenom
 } from './types'
 
 export interface YaciClientConfig {
@@ -220,6 +229,131 @@ export class YaciClient {
 		return this.query('governance_snapshots', {
 			proposal_id: `eq.${proposalId}`,
 			order: 'snapshot_time.desc'
+		})
+	}
+
+	// IBC endpoints
+
+	/**
+	 * Get IBC statistics (transfer counts, channel info, denom counts)
+	 */
+	async getIbcStats(): Promise<IbcStats> {
+		return this.rpc('get_ibc_stats')
+	}
+
+	/**
+	 * Get paginated IBC transfers with optional direction filter
+	 * @param direction - 'outgoing' | 'incoming' | undefined (all)
+	 */
+	async getIbcTransfers(
+		limit = 20,
+		offset = 0,
+		direction?: 'outgoing' | 'incoming'
+	): Promise<PaginatedResponse<IbcTransfer>> {
+		return this.rpc('get_ibc_transfers', {
+			_limit: limit,
+			_offset: offset,
+			_direction: direction
+		})
+	}
+
+	/**
+	 * Get IBC transfers for a specific address
+	 */
+	async getIbcTransfersByAddress(
+		address: string,
+		limit = 10,
+		offset = 0
+	): Promise<PaginatedResponse<IbcTransfer>> {
+		return this.rpc('get_ibc_transfers_by_address', {
+			_address: address,
+			_limit: limit,
+			_offset: offset
+		})
+	}
+
+	/**
+	 * Get IBC connections/channels with optional filters
+	 */
+	async getIbcConnections(
+		limit = 50,
+		offset = 0,
+		chainId?: string,
+		state?: string
+	): Promise<PaginatedResponse<IbcConnection>> {
+		return this.rpc('get_ibc_connections', {
+			_limit: limit,
+			_offset: offset,
+			_chain_id: chainId,
+			_state: state
+		})
+	}
+
+	/**
+	 * Get a specific IBC connection by channel ID
+	 */
+	async getIbcConnection(channelId: string, portId = 'transfer'): Promise<IbcConnection | null> {
+		return this.rpc('get_ibc_connection', {
+			_channel_id: channelId,
+			_port_id: portId
+		})
+	}
+
+	/**
+	 * Get IBC denom traces with optional base denom filter
+	 */
+	async getIbcDenomTraces(
+		limit = 50,
+		offset = 0,
+		baseDenom?: string
+	): Promise<PaginatedResponse<IbcDenomTrace>> {
+		return this.rpc('get_ibc_denom_traces', {
+			_limit: limit,
+			_offset: offset,
+			_base_denom: baseDenom
+		})
+	}
+
+	/**
+	 * Resolve an IBC denom to its full trace information
+	 */
+	async resolveIbcDenom(ibcDenom: string): Promise<IbcDenomResolution | null> {
+		return this.rpc('resolve_ibc_denom', { _ibc_denom: ibcDenom })
+	}
+
+	/**
+	 * Resolve any denom (native or IBC) to symbol/decimals
+	 */
+	async resolveDenom(denom: string): Promise<ResolvedDenom> {
+		return this.rpc('resolve_denom', { _denom: denom })
+	}
+
+	/**
+	 * Get list of connected IBC chains with channel counts
+	 */
+	async getIbcChains(): Promise<IbcChainSummary[]> {
+		return this.rpc('get_ibc_chains')
+	}
+
+	/**
+	 * Get IBC channel activity (transfer stats by channel)
+	 */
+	async getIbcChannelActivity(): Promise<IbcChannelActivity[]> {
+		return this.rpc('get_ibc_channel_activity')
+	}
+
+	/**
+	 * Get IBC volume timeseries data
+	 * @param hours - Number of hours to look back (default 24)
+	 * @param channel - Optional channel filter
+	 */
+	async getIbcVolumeTimeseries(
+		hours = 24,
+		channel?: string
+	): Promise<IbcVolumeTimeSeries> {
+		return this.rpc('get_ibc_volume_timeseries', {
+			_hours: hours,
+			_channel: channel
 		})
 	}
 }

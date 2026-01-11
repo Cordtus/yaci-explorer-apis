@@ -14,7 +14,10 @@ NC='\033[0m'
 # Configuration
 INSTALL_DIR="/opt/yaci-explorer-apis"
 CONFIG_DIR="${INSTALL_DIR}/config"
+BACKUP_DIR="${INSTALL_DIR}/backups"
 SYSTEMD_DIR="/etc/systemd/system"
+GIT_REPO="https://github.com/Cordtus/yaci-explorer-apis.git"
+GIT_BRANCH="${GIT_BRANCH:-main}"
 
 info() { echo -e "${BLUE}[i]${NC} $1"; }
 success() { echo -e "${GREEN}[+]${NC} $1"; }
@@ -28,12 +31,8 @@ check_root() {
 }
 
 check_deps() {
-    if ! command -v node &> /dev/null; then
-        error "Node.js is required. Install with: apt install nodejs"
-    fi
-    if ! command -v yarn &> /dev/null; then
-        info "Installing yarn..."
-        npm install -g yarn
+    if ! command -v bun &> /dev/null; then
+        error "Bun is required. Install with: curl -fsSL https://bun.sh/install | bash"
     fi
 }
 
@@ -43,11 +42,11 @@ install_app() {
     mkdir -p "${CONFIG_DIR}"
 
     # Copy application files
-    cp -r packages migrations proto scripts package.json yarn.lock tsconfig.json "${INSTALL_DIR}/"
+    cp -r packages migrations proto scripts package.json bun.lock tsconfig.json "${INSTALL_DIR}/"
 
     # Install dependencies
     cd "${INSTALL_DIR}"
-    yarn install --production=false
+    bun install
     success "Application installed"
 }
 
@@ -113,7 +112,7 @@ Type=simple
 User=root
 WorkingDirectory=${INSTALL_DIR}
 EnvironmentFile=${CONFIG_DIR}/explorer-apis.env
-ExecStart=/usr/bin/npx tsx scripts/chain-params-daemon.ts
+ExecStart=/usr/bin/bun run scripts/chain-params-daemon.ts
 Restart=on-failure
 RestartSec=10s
 StandardOutput=journal
@@ -136,7 +135,7 @@ Type=simple
 User=root
 WorkingDirectory=${INSTALL_DIR}
 EnvironmentFile=${CONFIG_DIR}/explorer-apis.env
-ExecStart=/usr/bin/npx tsx scripts/decode-evm-daemon.ts
+ExecStart=/usr/bin/bun run scripts/decode-evm-daemon.ts
 Restart=on-failure
 RestartSec=10s
 StandardOutput=journal
@@ -159,7 +158,7 @@ Type=simple
 User=root
 WorkingDirectory=${INSTALL_DIR}
 EnvironmentFile=${CONFIG_DIR}/explorer-apis.env
-ExecStart=/usr/bin/npx tsx scripts/decode-evm-single.ts
+ExecStart=/usr/bin/bun run scripts/decode-evm-single.ts
 Restart=on-failure
 RestartSec=10s
 StandardOutput=journal
@@ -223,24 +222,35 @@ YACI Explorer APIs Deployment Script
 Usage: $0 [COMMAND]
 
 Commands:
-    install         Full installation (deps, app, config, migrations, services)
-    update          Update app and restart services
-    migrate         Run database migrations only
-    config          Setup configuration files
-    start           Start all services
-    stop            Stop all services
-    restart         Restart all services
-    status          Show service status
-    logs            Follow chain params daemon logs
-    logs-evm        Follow EVM decode daemon logs
-    enable-evm      Enable EVM decoder services
-    help            Show this help
+    install             Full installation (deps, app, config, migrations, services)
+    update              Update app from local files and restart services
+    deploy [branch]     Deploy from git (default: main) with backup and migrations
+    migrate             Run database migrations only
+    backup              Create database backup
+    restore <file>      Restore database from backup
+    rollback <dir>      Rollback to previous deployment
+    config              Setup configuration files
+    start               Start all services
+    stop                Stop all services
+    restart             Restart all services
+    status              Show service status
+    logs                Follow chain params daemon logs
+    logs-evm            Follow EVM decode daemon logs
+    enable-evm          Enable EVM decoder services
+    help                Show this help
 
 Examples:
-    sudo $0 install     # First time setup
-    sudo $0 update      # After code changes
-    sudo $0 migrate     # Run migrations only
-    sudo $0 logs        # View logs
+    sudo $0 install             # First time setup
+    sudo $0 deploy              # Deploy latest main from git
+    sudo $0 deploy feat/ibc     # Deploy specific branch
+    sudo $0 backup              # Backup database before manual changes
+    sudo $0 restore             # List available backups
+    sudo $0 rollback            # List available rollback points
+    sudo $0 migrate             # Run migrations only
+    sudo $0 logs                # View logs
+
+Environment:
+    GIT_BRANCH=<branch>  Override default branch for deploy command
 
 Configuration:
     Edit ${CONFIG_DIR}/explorer-apis.env
@@ -286,10 +296,10 @@ update_app() {
     info "Updating YACI Explorer APIs..."
 
     # Copy updated files
-    cp -r packages migrations proto scripts package.json yarn.lock tsconfig.json "${INSTALL_DIR}/"
+    cp -r packages migrations proto scripts package.json bun.lock tsconfig.json "${INSTALL_DIR}/"
 
     cd "${INSTALL_DIR}"
-    yarn install --production=false
+    bun install
 
     info "Restarting services..."
     systemctl restart yaci-chain-params 2>/dev/null || true
@@ -300,6 +310,163 @@ update_app() {
     show_status
 }
 
+backup_db() {
+    info "Creating database backup..."
+    mkdir -p "${BACKUP_DIR}"
+
+    if [ -z "$DATABASE_URL" ]; then
+        if [ -f "${CONFIG_DIR}/explorer-apis.env" ]; then
+            source "${CONFIG_DIR}/explorer-apis.env"
+        fi
+    fi
+
+    if [ -z "$DATABASE_URL" ]; then
+        error "DATABASE_URL not set"
+    fi
+
+    BACKUP_FILE="${BACKUP_DIR}/backup_$(date +%Y%m%d_%H%M%S).dump"
+    pg_dump -Fc "$DATABASE_URL" > "$BACKUP_FILE"
+    success "Backup created: $BACKUP_FILE"
+
+    # Keep only last 5 backups
+    cd "${BACKUP_DIR}"
+    ls -t *.dump 2>/dev/null | tail -n +6 | xargs -r rm -f
+    info "Retained last 5 backups"
+}
+
+restore_db() {
+    check_root
+
+    if [ -z "$2" ]; then
+        info "Available backups:"
+        ls -lt "${BACKUP_DIR}"/*.dump 2>/dev/null || echo "  No backups found"
+        echo ""
+        error "Usage: $0 restore <backup_file>"
+    fi
+
+    BACKUP_FILE="$2"
+    if [ ! -f "$BACKUP_FILE" ]; then
+        # Try relative to backup dir
+        BACKUP_FILE="${BACKUP_DIR}/$2"
+    fi
+
+    if [ ! -f "$BACKUP_FILE" ]; then
+        error "Backup file not found: $2"
+    fi
+
+    if [ -z "$DATABASE_URL" ]; then
+        if [ -f "${CONFIG_DIR}/explorer-apis.env" ]; then
+            source "${CONFIG_DIR}/explorer-apis.env"
+        fi
+    fi
+
+    warning "This will REPLACE the current database with backup: $BACKUP_FILE"
+    read -p "Are you sure? (y/N) " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        info "Aborted"
+        exit 0
+    fi
+
+    stop_services
+    info "Restoring database..."
+    pg_restore -Fc -c -d "$DATABASE_URL" "$BACKUP_FILE"
+    start_services
+    success "Database restored from $BACKUP_FILE"
+}
+
+deploy_from_git() {
+    check_root
+    check_deps
+
+    BRANCH="${2:-$GIT_BRANCH}"
+    DEPLOY_TMP="/tmp/yaci-deploy-$$"
+
+    info "Deploying from git (branch: $BRANCH)..."
+
+    # Backup first
+    backup_db
+
+    # Clone to temp
+    git clone --depth 1 --branch "$BRANCH" "$GIT_REPO" "$DEPLOY_TMP"
+
+    # Stop services
+    stop_services
+
+    # Save current version for rollback
+    if [ -d "${INSTALL_DIR}/.git" ] || [ -f "${INSTALL_DIR}/package.json" ]; then
+        ROLLBACK_DIR="${BACKUP_DIR}/rollback_$(date +%Y%m%d_%H%M%S)"
+        mkdir -p "$ROLLBACK_DIR"
+        cp -r "${INSTALL_DIR}/packages" "${INSTALL_DIR}/migrations" "${INSTALL_DIR}/scripts" \
+              "${INSTALL_DIR}/package.json" "${INSTALL_DIR}/bun.lock" "$ROLLBACK_DIR/" 2>/dev/null || true
+        info "Saved rollback point: $ROLLBACK_DIR"
+    fi
+
+    # Update application
+    cp -r "$DEPLOY_TMP/packages" "$DEPLOY_TMP/migrations" "$DEPLOY_TMP/proto" \
+          "$DEPLOY_TMP/scripts" "$DEPLOY_TMP/package.json" "$DEPLOY_TMP/bun.lock" \
+          "$DEPLOY_TMP/tsconfig.json" "${INSTALL_DIR}/"
+
+    cd "${INSTALL_DIR}"
+    bun install
+
+    # Run migrations
+    run_migrations
+
+    # Restart services
+    start_services
+
+    # Cleanup
+    rm -rf "$DEPLOY_TMP"
+
+    success "Deployment complete (branch: $BRANCH)"
+    show_status
+}
+
+rollback() {
+    check_root
+
+    ROLLBACK_DIRS=$(ls -dt "${BACKUP_DIR}"/rollback_* 2>/dev/null | head -5)
+
+    if [ -z "$ROLLBACK_DIRS" ]; then
+        error "No rollback points found"
+    fi
+
+    if [ -z "$2" ]; then
+        info "Available rollback points:"
+        ls -dt "${BACKUP_DIR}"/rollback_* 2>/dev/null | head -5
+        echo ""
+        error "Usage: $0 rollback <rollback_dir>"
+    fi
+
+    ROLLBACK_DIR="$2"
+    if [ ! -d "$ROLLBACK_DIR" ]; then
+        ROLLBACK_DIR="${BACKUP_DIR}/$2"
+    fi
+
+    if [ ! -d "$ROLLBACK_DIR" ]; then
+        error "Rollback directory not found: $2"
+    fi
+
+    warning "Rolling back to: $ROLLBACK_DIR"
+    read -p "Are you sure? (y/N) " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        info "Aborted"
+        exit 0
+    fi
+
+    stop_services
+
+    cp -r "$ROLLBACK_DIR"/* "${INSTALL_DIR}/"
+    cd "${INSTALL_DIR}"
+    bun install
+
+    start_services
+    success "Rolled back to $ROLLBACK_DIR"
+    show_status
+}
+
 case "${1:-help}" in
     install)
         full_install
@@ -307,9 +474,22 @@ case "${1:-help}" in
     update)
         update_app
         ;;
+    deploy)
+        deploy_from_git "$@"
+        ;;
     migrate)
         check_root
         run_migrations
+        ;;
+    backup)
+        check_root
+        backup_db
+        ;;
+    restore)
+        restore_db "$@"
+        ;;
+    rollback)
+        rollback "$@"
         ;;
     config)
         check_root
