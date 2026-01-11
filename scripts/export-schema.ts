@@ -1,4 +1,4 @@
-#!/usr/bin/env npx tsx
+#!/usr/bin/env bun
 import pg from 'pg'
 import { writeFileSync } from 'fs'
 const { Pool } = pg

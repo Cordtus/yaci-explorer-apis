@@ -1,17 +1,17 @@
 FROM postgrest/postgrest:v12.2.3 AS postgrest
 
-# Build stage for Node.js worker
-FROM node:20-alpine AS builder
+# Build stage for Bun worker
+FROM oven/bun:1.3-alpine AS builder
 
 WORKDIR /app
 
-COPY package.json yarn.lock ./
-RUN yarn install --frozen-lockfile
+COPY package.json bun.lock ./
+RUN bun install --frozen-lockfile
 
 COPY . .
 
 # Final stage combining both
-FROM node:20-alpine
+FROM oven/bun:1.3-alpine
 
 WORKDIR /app
 
@@ -21,11 +21,11 @@ RUN apk add --no-cache tini
 # Copy PostgREST binary
 COPY --from=postgrest /bin/postgrest /usr/local/bin/postgrest
 
-# Copy Node.js app with dependencies
+# Copy Bun app with dependencies
 COPY --from=builder /app /app
 
 # Use tini as entrypoint for proper signal handling (-s for subreaper mode)
 ENTRYPOINT ["/sbin/tini", "-s", "--"]
 
-# Default to PostgREST (overridden by fly.toml for worker process)
+# Default to PostgREST (overridden by process config for worker process)
 CMD ["/usr/local/bin/postgrest"]

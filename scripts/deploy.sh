@@ -28,12 +28,8 @@ check_root() {
 }
 
 check_deps() {
-    if ! command -v node &> /dev/null; then
-        error "Node.js is required. Install with: apt install nodejs"
-    fi
-    if ! command -v yarn &> /dev/null; then
-        info "Installing yarn..."
-        npm install -g yarn
+    if ! command -v bun &> /dev/null; then
+        error "Bun is required. Install with: curl -fsSL https://bun.sh/install | bash"
     fi
 }
 
@@ -43,11 +39,11 @@ install_app() {
     mkdir -p "${CONFIG_DIR}"
 
     # Copy application files
-    cp -r packages migrations proto scripts package.json yarn.lock tsconfig.json "${INSTALL_DIR}/"
+    cp -r packages migrations proto scripts package.json bun.lock tsconfig.json "${INSTALL_DIR}/"
 
     # Install dependencies
     cd "${INSTALL_DIR}"
-    yarn install --production=false
+    bun install
     success "Application installed"
 }
 
@@ -113,7 +109,7 @@ Type=simple
 User=root
 WorkingDirectory=${INSTALL_DIR}
 EnvironmentFile=${CONFIG_DIR}/explorer-apis.env
-ExecStart=/usr/bin/npx tsx scripts/chain-params-daemon.ts
+ExecStart=/usr/bin/bun run scripts/chain-params-daemon.ts
 Restart=on-failure
 RestartSec=10s
 StandardOutput=journal
@@ -136,7 +132,7 @@ Type=simple
 User=root
 WorkingDirectory=${INSTALL_DIR}
 EnvironmentFile=${CONFIG_DIR}/explorer-apis.env
-ExecStart=/usr/bin/npx tsx scripts/decode-evm-daemon.ts
+ExecStart=/usr/bin/bun run scripts/decode-evm-daemon.ts
 Restart=on-failure
 RestartSec=10s
 StandardOutput=journal
@@ -159,7 +155,7 @@ Type=simple
 User=root
 WorkingDirectory=${INSTALL_DIR}
 EnvironmentFile=${CONFIG_DIR}/explorer-apis.env
-ExecStart=/usr/bin/npx tsx scripts/decode-evm-single.ts
+ExecStart=/usr/bin/bun run scripts/decode-evm-single.ts
 Restart=on-failure
 RestartSec=10s
 StandardOutput=journal
