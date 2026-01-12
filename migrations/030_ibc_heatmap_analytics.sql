@@ -6,6 +6,89 @@
 BEGIN;
 
 -- =============================================================================
+-- HELPER: Extract transfer details from message
+-- Included here since migration 028 may have failed
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION api.extract_ibc_transfer_details(_message api.messages_main)
+RETURNS jsonb
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+  _result jsonb;
+  _packet_data jsonb;
+  _token_denom text;
+  _token_amount text;
+  _sender text;
+  _receiver text;
+  _source_channel text;
+BEGIN
+  IF _message.type = '/ibc.applications.transfer.v1.MsgTransfer' THEN
+    _sender := _message.sender;
+    _receiver := _message.metadata->>'receiver';
+    _source_channel := COALESCE(
+      _message.metadata->>'sourceChannel',
+      _message.metadata->>'source_channel'
+    );
+    _token_denom := COALESCE(
+      _message.metadata->'token'->>'denom',
+      _message.metadata->>'denom'
+    );
+    _token_amount := COALESCE(
+      _message.metadata->'token'->>'amount',
+      _message.metadata->>'amount'
+    );
+
+  ELSIF _message.type = '/ibc.core.channel.v1.MsgRecvPacket' THEN
+    _packet_data := COALESCE(
+      _message.metadata->'packet'->'data',
+      _message.metadata->'packetData',
+      _message.metadata->'packet_data'
+    );
+
+    IF jsonb_typeof(_packet_data) = 'string' THEN
+      BEGIN
+        _packet_data := (_packet_data #>> '{}')::jsonb;
+      EXCEPTION WHEN OTHERS THEN
+        _packet_data := NULL;
+      END;
+    END IF;
+
+    _sender := COALESCE(
+      _packet_data->>'sender',
+      _message.metadata->>'sender'
+    );
+    _receiver := COALESCE(
+      _packet_data->>'receiver',
+      _message.metadata->>'receiver'
+    );
+    _source_channel := COALESCE(
+      _message.metadata->'packet'->>'sourceChannel',
+      _message.metadata->'packet'->>'source_channel',
+      _message.metadata->>'sourceChannel'
+    );
+    _token_denom := COALESCE(
+      _packet_data->>'denom',
+      _message.metadata->>'denom'
+    );
+    _token_amount := COALESCE(
+      _packet_data->>'amount',
+      _message.metadata->>'amount'
+    );
+  END IF;
+
+  RETURN jsonb_build_object(
+    'sender', _sender,
+    'receiver', _receiver,
+    'source_channel', _source_channel,
+    'token_denom', _token_denom,
+    'token_amount', _token_amount
+  );
+END;
+$$;
+
+-- =============================================================================
 -- FIX: get_ibc_volume_timeseries response structure
 -- Frontend expects { timeseries, summary } not { hours, data, channels }
 -- =============================================================================
@@ -300,6 +383,7 @@ $$;
 -- GRANT PERMISSIONS
 -- =============================================================================
 
+GRANT EXECUTE ON FUNCTION api.extract_ibc_transfer_details(api.messages_main) TO web_anon;
 GRANT EXECUTE ON FUNCTION api.get_ibc_volume_timeseries(integer, text) TO web_anon;
 GRANT EXECUTE ON FUNCTION api.get_ibc_heatmap_data(text, text, text, text) TO web_anon;
 
