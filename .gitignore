@@ -6,6 +6,7 @@ dist/
 # AI/development docs
 CLAUDE.md
 AGENTS.md
+.dev/
 .claude/
 .serena/
 .playwright-mcp/
