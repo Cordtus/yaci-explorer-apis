@@ -179,12 +179,15 @@ async function processBatch(pool: pg.Pool, root: protobuf.Root): Promise<number>
 				continue
 			}
 
+			// Collect logs in memory first; they depend on the evm_transactions FK
+			const pendingLogs: DecodedLog[] = []
+
 			const responseQuery = await client.query(
 				'SELECT data->\'tx_response\'->\'data\' as response_data FROM api.transactions_raw WHERE id = $1',
 				[tx_id]
 			)
 
-			// Try to enrich with response data if available
+			// Enrich with response data if available
 			if (responseQuery.rows.length > 0 && responseQuery.rows[0].response_data) {
 				const responseHex = responseQuery.rows[0].response_data
 				const decodedResponse = await decodeTxResponse(responseHex, root)
@@ -193,93 +196,9 @@ async function processBatch(pool: pg.Pool, root: protobuf.Root): Promise<number>
 					decoded.gas_used = decodedResponse.gasUsed
 					decoded.status = decodedResponse.vmError ? 0 : 1
 
-					// Process logs if we have response data
 					for (const log of decodedResponse.logs) {
 						log.tx_id = tx_id
-						await client.query(
-							`INSERT INTO api.evm_logs (tx_id, log_index, address, topics, data)
-							 VALUES ($1, $2, $3, $4, $5)
-							 ON CONFLICT (tx_id, log_index) DO NOTHING`,
-							[log.tx_id, log.log_index, log.address, log.topics, log.data]
-						)
-
-						// Event signatures for token transfers
-						const TRANSFER_SIG = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef' // ERC-20/721
-						const TRANSFER_SINGLE_SIG = '0xc3d58168c5ae7397731d063d5bbf3d657854427343f4c083240f7aacaa2d0f62' // ERC-1155
-						const TRANSFER_BATCH_SIG = '0x4a39dc06d4c0dbc64b70af90fd698a233a518aa5d07e595d983b8c0526c8f7fb' // ERC-1155
-
-						// ERC-20 or ERC-721 Transfer event
-						if (log.topics[0] === TRANSFER_SIG && log.topics.length >= 3) {
-							const fromAddr = '0x' + log.topics[1].slice(26).toLowerCase()
-							const toAddr = '0x' + log.topics[2].slice(26).toLowerCase()
-
-							// ERC-721: has 4 topics (tokenId in topics[3])
-							// ERC-20: has 3 topics (value in data)
-							const isERC721 = log.topics.length === 4
-							const tokenType = isERC721 ? 'ERC721' : 'ERC20'
-							const value = isERC721 ? log.topics[3] : (log.data || '0x0')
-
-							await client.query(
-								`INSERT INTO api.evm_token_transfers (tx_id, log_index, token_address, from_address, to_address, value)
-								 VALUES ($1, $2, $3, $4, $5, $6)
-								 ON CONFLICT (tx_id, log_index) DO NOTHING`,
-								[tx_id, log.log_index, log.address, fromAddr, toAddr, value]
-							)
-
-							await client.query(
-								`INSERT INTO api.evm_tokens (address, type, is_verified)
-								 VALUES ($1, $2, false)
-								 ON CONFLICT (address) DO UPDATE SET type = EXCLUDED.type WHERE api.evm_tokens.type = 'ERC20' AND EXCLUDED.type = 'ERC721'`,
-								[log.address, tokenType]
-							)
-						}
-
-						// ERC-1155 TransferSingle event
-						// topics: [sig, operator, from, to], data: [id (uint256), value (uint256)]
-						if (log.topics[0] === TRANSFER_SINGLE_SIG && log.topics.length === 4) {
-							const fromAddr = '0x' + log.topics[2].slice(26).toLowerCase()
-							const toAddr = '0x' + log.topics[3].slice(26).toLowerCase()
-							// Data contains id and value, each 32 bytes (64 hex chars)
-							const tokenId = log.data ? '0x' + log.data.slice(2, 66) : '0x0'
-							const value = log.data ? '0x' + log.data.slice(66, 130) : '0x0'
-
-							await client.query(
-								`INSERT INTO api.evm_token_transfers (tx_id, log_index, token_address, from_address, to_address, value)
-								 VALUES ($1, $2, $3, $4, $5, $6)
-								 ON CONFLICT (tx_id, log_index) DO NOTHING`,
-								[tx_id, log.log_index, log.address, fromAddr, toAddr, `${tokenId}:${value}`]
-							)
-
-							await client.query(
-								`INSERT INTO api.evm_tokens (address, type, is_verified)
-								 VALUES ($1, 'ERC1155', false)
-								 ON CONFLICT (address) DO NOTHING`,
-								[log.address]
-							)
-						}
-
-						// ERC-1155 TransferBatch event
-						// topics: [sig, operator, from, to], data: [ids[], values[]]
-						if (log.topics[0] === TRANSFER_BATCH_SIG && log.topics.length === 4) {
-							const fromAddr = '0x' + log.topics[2].slice(26).toLowerCase()
-							const toAddr = '0x' + log.topics[3].slice(26).toLowerCase()
-							// Store the entire batch data as value (complex to parse individually)
-							const batchData = log.data || '0x0'
-
-							await client.query(
-								`INSERT INTO api.evm_token_transfers (tx_id, log_index, token_address, from_address, to_address, value)
-								 VALUES ($1, $2, $3, $4, $5, $6)
-								 ON CONFLICT (tx_id, log_index) DO NOTHING`,
-								[tx_id, log.log_index, log.address, fromAddr, toAddr, `batch:${batchData}`]
-							)
-
-							await client.query(
-								`INSERT INTO api.evm_tokens (address, type, is_verified)
-								 VALUES ($1, 'ERC1155', false)
-								 ON CONFLICT (address) DO NOTHING`,
-								[log.address]
-							)
-						}
+						pendingLogs.push(log)
 					}
 				}
 			}
@@ -294,7 +213,7 @@ async function processBatch(pool: pg.Pool, root: protobuf.Root): Promise<number>
 				}
 			}
 
-			// Always insert the transaction to prevent infinite loop
+			// Insert the parent row FIRST (evm_logs has FK to evm_transactions)
 			await client.query(
 				`INSERT INTO api.evm_transactions (
 					tx_id, hash, "from", "to", nonce, gas_limit, gas_price,
@@ -322,10 +241,97 @@ async function processBatch(pool: pg.Pool, root: protobuf.Root): Promise<number>
 					decoded.function_signature,
 				]
 			)
+
+			// Now insert logs and token transfers (parent row exists)
+			const TRANSFER_SIG = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef' // ERC-20/721
+			const TRANSFER_SINGLE_SIG = '0xc3d58168c5ae7397731d063d5bbf3d657854427343f4c083240f7aacaa2d0f62' // ERC-1155
+			const TRANSFER_BATCH_SIG = '0x4a39dc06d4c0dbc64b70af90fd698a233a518aa5d07e595d983b8c0526c8f7fb' // ERC-1155
+
+			for (const log of pendingLogs) {
+				await client.query(
+					`INSERT INTO api.evm_logs (tx_id, log_index, address, topics, data)
+					 VALUES ($1, $2, $3, $4, $5)
+					 ON CONFLICT (tx_id, log_index) DO NOTHING`,
+					[log.tx_id, log.log_index, log.address, log.topics, log.data]
+				)
+
+				// ERC-20 or ERC-721 Transfer event
+				if (log.topics[0] === TRANSFER_SIG && log.topics.length >= 3) {
+					const fromAddr = '0x' + log.topics[1].slice(26).toLowerCase()
+					const toAddr = '0x' + log.topics[2].slice(26).toLowerCase()
+
+					// ERC-721: has 4 topics (tokenId in topics[3])
+					// ERC-20: has 3 topics (value in data)
+					const isERC721 = log.topics.length === 4
+					const tokenType = isERC721 ? 'ERC721' : 'ERC20'
+					const value = isERC721 ? log.topics[3] : (log.data || '0x0')
+
+					await client.query(
+						`INSERT INTO api.evm_token_transfers (tx_id, log_index, token_address, from_address, to_address, value)
+						 VALUES ($1, $2, $3, $4, $5, $6)
+						 ON CONFLICT (tx_id, log_index) DO NOTHING`,
+						[tx_id, log.log_index, log.address, fromAddr, toAddr, value]
+					)
+
+					await client.query(
+						`INSERT INTO api.evm_tokens (address, type, is_verified)
+						 VALUES ($1, $2, false)
+						 ON CONFLICT (address) DO UPDATE SET type = EXCLUDED.type WHERE api.evm_tokens.type = 'ERC20' AND EXCLUDED.type = 'ERC721'`,
+						[log.address, tokenType]
+					)
+				}
+
+				// ERC-1155 TransferSingle event
+				// topics: [sig, operator, from, to], data: [id (uint256), value (uint256)]
+				if (log.topics[0] === TRANSFER_SINGLE_SIG && log.topics.length === 4) {
+					const fromAddr = '0x' + log.topics[2].slice(26).toLowerCase()
+					const toAddr = '0x' + log.topics[3].slice(26).toLowerCase()
+					// Data contains id and value, each 32 bytes (64 hex chars)
+					const tokenId = log.data ? '0x' + log.data.slice(2, 66) : '0x0'
+					const value = log.data ? '0x' + log.data.slice(66, 130) : '0x0'
+
+					await client.query(
+						`INSERT INTO api.evm_token_transfers (tx_id, log_index, token_address, from_address, to_address, value)
+						 VALUES ($1, $2, $3, $4, $5, $6)
+						 ON CONFLICT (tx_id, log_index) DO NOTHING`,
+						[tx_id, log.log_index, log.address, fromAddr, toAddr, `${tokenId}:${value}`]
+					)
+
+					await client.query(
+						`INSERT INTO api.evm_tokens (address, type, is_verified)
+						 VALUES ($1, 'ERC1155', false)
+						 ON CONFLICT (address) DO NOTHING`,
+						[log.address]
+					)
+				}
+
+				// ERC-1155 TransferBatch event
+				// topics: [sig, operator, from, to], data: [ids[], values[]]
+				if (log.topics[0] === TRANSFER_BATCH_SIG && log.topics.length === 4) {
+					const fromAddr = '0x' + log.topics[2].slice(26).toLowerCase()
+					const toAddr = '0x' + log.topics[3].slice(26).toLowerCase()
+					// Store the entire batch data as value (complex to parse individually)
+					const batchData = log.data || '0x0'
+
+					await client.query(
+						`INSERT INTO api.evm_token_transfers (tx_id, log_index, token_address, from_address, to_address, value)
+						 VALUES ($1, $2, $3, $4, $5, $6)
+						 ON CONFLICT (tx_id, log_index) DO NOTHING`,
+						[tx_id, log.log_index, log.address, fromAddr, toAddr, `batch:${batchData}`]
+					)
+
+					await client.query(
+						`INSERT INTO api.evm_tokens (address, type, is_verified)
+						 VALUES ($1, 'ERC1155', false)
+						 ON CONFLICT (address) DO NOTHING`,
+						[log.address]
+					)
+				}
+			}
 		}
 
 		await client.query('COMMIT')
-		console.log(`✓ Decoded ${pending.rows.length} transactions`)
+		console.log(`Decoded ${pending.rows.length} transactions`)
 		return pending.rows.length
 	} catch (err) {
 		await client.query('ROLLBACK')
