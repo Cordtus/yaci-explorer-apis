@@ -20,13 +20,34 @@
  */
 
 import pg from 'pg'
+import { loadChainsConfig } from './lib/chain-config.js'
+
 const { Pool } = pg
 
 const DATABASE_URL = process.env.DATABASE_URL || 'postgres://postgres:bOqwmcryOQcdmrO@localhost:15432/postgres?sslmode=disable'
 const CHAIN_QUERY_URL = process.env.CHAIN_QUERY_URL || 'https://yaci-explorer-apis.fly.dev'
+const CHAIN_ID = process.env.CHAIN_ID || ''
 const DEBOUNCE_MS = parseInt(process.env.DEBOUNCE_MS || '2000', 10)
 const MV_REFRESH_INTERVAL_MS = parseInt(process.env.MV_REFRESH_INTERVAL_MS || '900000', 10)
 const FULL_SYNC_INTERVAL_MS = parseInt(process.env.FULL_SYNC_INTERVAL_MS || '21600000', 10)
+
+// Resolve chain query base URL: if CHAIN_ID is set, include it in the URL path
+const CHAIN_QUERY_BASE = CHAIN_ID
+	? `${CHAIN_QUERY_URL}/chain/${CHAIN_ID}`
+	: `${CHAIN_QUERY_URL}/chain`
+
+// Resolve bech32 consensus prefix from chain config (if available) or env var
+let BECH32_CONS_PREFIX = process.env.BECH32_CONS_PREFIX || 'raivalcons'
+try {
+	const cfg = loadChainsConfig()
+	const chainId = CHAIN_ID || cfg.defaultChain
+	const chainCfg = cfg.chains[chainId]
+	if (chainCfg?.bech32ConsPrefix) {
+		BECH32_CONS_PREFIX = chainCfg.bech32ConsPrefix
+	}
+} catch {
+	// chains.toml not available, use env var default
+}
 
 // ============================================================================
 // Shared helpers
@@ -120,7 +141,7 @@ async function fetchValidators(): Promise<any[]> {
 	const timeoutId = setTimeout(() => controller.abort(), 30000)
 
 	try {
-		const response = await fetch(`${CHAIN_QUERY_URL}/chain/staking/validators`, {
+		const response = await fetch(`${CHAIN_QUERY_BASE}/staking/validators`, {
 			signal: controller.signal,
 		})
 		clearTimeout(timeoutId)
@@ -143,7 +164,7 @@ async function fetchValidator(operatorAddress: string): Promise<any | null> {
 	const timeoutId = setTimeout(() => controller.abort(), 10000)
 
 	try {
-		const response = await fetch(`${CHAIN_QUERY_URL}/chain/staking/validator/${operatorAddress}`, {
+		const response = await fetch(`${CHAIN_QUERY_BASE}/staking/validator/${operatorAddress}`, {
 			signal: controller.signal,
 		})
 		clearTimeout(timeoutId)
@@ -171,7 +192,7 @@ async function fetchStakingPool(): Promise<{ bondedTokens: string; notBondedToke
 	const timeoutId = setTimeout(() => controller.abort(), 10000)
 
 	try {
-		const response = await fetch(`${CHAIN_QUERY_URL}/chain/staking/pool`, {
+		const response = await fetch(`${CHAIN_QUERY_BASE}/staking/pool`, {
 			signal: controller.signal,
 		})
 		clearTimeout(timeoutId)
@@ -506,7 +527,9 @@ async function main() {
 	const pool = new Pool({ connectionString: DATABASE_URL })
 
 	console.log(`[ValidatorRefresh] Starting event-driven validator refresh service`)
-	console.log(`[ValidatorRefresh] Chain query URL: ${CHAIN_QUERY_URL}`)
+	console.log(`[ValidatorRefresh] Chain query base: ${CHAIN_QUERY_BASE}`)
+	console.log(`[ValidatorRefresh] Chain ID: ${CHAIN_ID || '(default)'}`)
+	console.log(`[ValidatorRefresh] Bech32 cons prefix: ${BECH32_CONS_PREFIX}`)
 	console.log(`[ValidatorRefresh] Debounce: ${DEBOUNCE_MS}ms`)
 
 	// Start all three loops concurrently

@@ -21,7 +21,7 @@ primary_region = 'sjc'
   POLL_INTERVAL_MS = '5000'
   BATCH_SIZE = '100'
   CHAIN_QUERY_URL = 'https://yaci-explorer-apis.fly.dev'
-  CHAIN_GRPC_ENDPOINT = 'grpc.republicai.io:443'
+  CHAIN_ID = 'republic_77701-1'
 
 [processes]
   app = "npx tsx scripts/api-gateway.ts"

@@ -1,33 +1,42 @@
 #!/usr/bin/env npx tsx
 /**
- * Chain Query Service
+ * Chain Query Service (Multi-Chain)
  *
- * HTTP proxy for chain queries via gRPC.
- * Provides CORS-enabled endpoints for browser clients.
+ * HTTP proxy for chain queries via gRPC. Supports multiple chains via chains.toml.
+ * Each chain gets a lazily-initialized gRPC client.
  *
- * Endpoints:
- * - GET /chain/balances/:address - Get account balances
- * - GET /chain/spendable/:address - Get spendable balances
- * - GET /chain/supply/:denom - Get supply of a denom
- * - GET /chain/staking/validators - Get all validators
- * - GET /chain/staking/validator/:address - Get single validator by operator address
- * - GET /chain/staking/pool - Get staking pool info
- * - GET /chain/auth/account/:address - Get account info (for signing)
- * - POST /chain/tx/broadcast - Broadcast signed transaction
- * - GET /chain/health - Health check
+ * URL patterns:
+ *   /chain/:chainId/<endpoint>   -- query a specific chain
+ *   /chain/<endpoint>            -- query the default chain (backward compat)
+ *   /chain/health                -- all chains health
+ *   /chain/:chainId/health       -- single chain health
+ *
+ * Endpoints per chain:
+ * - GET  balances/:address
+ * - GET  spendable/:address
+ * - GET  supply/:denom
+ * - GET  staking/validators?status=...
+ * - GET  staking/validator/:address
+ * - GET  staking/pool
+ * - GET  auth/account/:address
+ * - GET  slashing/params
+ * - GET  slashing/signing_info/:cons_address
+ * - GET  slashing/signing_infos
+ * - GET  ibc/channel/:channelId/:portId
+ * - GET  ibc/channel/:channelId/:portId/client_state
+ * - GET  ibc/denom_trace/:hash
+ * - POST tx/broadcast
  */
 
 import * as http from 'http'
 import * as grpc from '@grpc/grpc-js'
 import protobuf from 'protobufjs'
+import { loadChainsConfig, getChainConfig, getChainIds, getDefaultChainId } from './lib/chain-config.js'
 
-const GRPC_ENDPOINT = process.env.CHAIN_GRPC_ENDPOINT || 'localhost:9090'
 const PORT = parseInt(process.env.CHAIN_QUERY_PORT || '3001', 10)
-// Default to TLS unless explicitly set to insecure
-const INSECURE = process.env.YACI_INSECURE === 'true'
 
 // Proto definitions for chain queries
-const PROTOS = {
+const PROTOS: Record<string, string> = {
 	auth: `
 		syntax = "proto3";
 		package cosmos.auth.v1beta1;
@@ -399,6 +408,91 @@ const PROTOS = {
 			uint64 total = 2;
 		}
 	`,
+	ibc_channel: `
+		syntax = "proto3";
+		package ibc.core.channel.v1;
+
+		service Query {
+			rpc Channel(QueryChannelRequest) returns (QueryChannelResponse);
+			rpc ChannelClientState(QueryChannelClientStateRequest) returns (QueryChannelClientStateResponse);
+		}
+
+		message QueryChannelRequest {
+			string port_id = 1;
+			string channel_id = 2;
+		}
+
+		message QueryChannelResponse {
+			Channel channel = 1;
+			bytes proof = 2;
+			Height proof_height = 3;
+		}
+
+		message QueryChannelClientStateRequest {
+			string port_id = 1;
+			string channel_id = 2;
+		}
+
+		message QueryChannelClientStateResponse {
+			IdentifiedClientState identified_client_state = 1;
+			bytes proof = 2;
+			Height proof_height = 3;
+		}
+
+		message Channel {
+			int32 state = 1;
+			int32 ordering = 2;
+			Counterparty counterparty = 3;
+			repeated string connection_hops = 4;
+			string version = 5;
+		}
+
+		message Counterparty {
+			string port_id = 1;
+			string channel_id = 2;
+		}
+
+		message IdentifiedClientState {
+			string client_id = 1;
+			Any client_state = 2;
+		}
+
+		message Any {
+			string type_url = 1;
+			bytes value = 2;
+		}
+
+		message Height {
+			uint64 revision_number = 1;
+			uint64 revision_height = 2;
+		}
+
+		// Tendermint client state for decoding chain_id
+		message TendermintClientState {
+			string chain_id = 1;
+		}
+	`,
+	ibc_transfer: `
+		syntax = "proto3";
+		package ibc.applications.transfer.v1;
+
+		service Query {
+			rpc DenomTrace(QueryDenomTraceRequest) returns (QueryDenomTraceResponse);
+		}
+
+		message QueryDenomTraceRequest {
+			string hash = 1;
+		}
+
+		message QueryDenomTraceResponse {
+			DenomTrace denom_trace = 1;
+		}
+
+		message DenomTrace {
+			string path = 1;
+			string base_denom = 2;
+		}
+	`,
 }
 
 // Generic gRPC query client
@@ -426,15 +520,12 @@ class ChainQueryClient {
 	// Create a stub for a specific service.
 	// Cache key includes method names so different method sets for the same
 	// service each get their own stub (e.g. bank AllBalances vs SupplyOf).
-	private getStub(service: string, methods: Record<string, { path: string; requestType: string; responseType: string }>): any {
+	private getStub(service: string, moduleName: string, methods: Record<string, { path: string; requestType: string; responseType: string }>): any {
 		const cacheKey = `${service}:${Object.keys(methods).sort().join(',')}`
 		if (this.stubs.has(cacheKey)) {
 			return this.stubs.get(cacheKey)
 		}
 
-		// Extract module name from service (e.g., "cosmos.bank.v1beta1.Query" -> "bank")
-		const parts = service.split('.')
-		const moduleName = parts.length >= 2 ? parts[1] : parts[0]
 		const root = this.roots.get(moduleName)
 		if (!root) {
 			throw new Error(`Unknown module: ${moduleName} (from service: ${service})`)
@@ -463,9 +554,16 @@ class ChainQueryClient {
 		return stub
 	}
 
+	// Backward-compat wrapper: infer module name from service path
+	private getStubAuto(service: string, methods: Record<string, { path: string; requestType: string; responseType: string }>): any {
+		const parts = service.split('.')
+		const moduleName = parts.length >= 2 ? parts[1] : parts[0]
+		return this.getStub(service, moduleName, methods)
+	}
+
 	// Bank queries
 	async getAllBalances(address: string): Promise<any> {
-		const stub = this.getStub('cosmos.bank.v1beta1.Query', {
+		const stub = this.getStubAuto('cosmos.bank.v1beta1.Query', {
 			AllBalances: {
 				path: '/cosmos.bank.v1beta1.Query/AllBalances',
 				requestType: 'cosmos.bank.v1beta1.QueryAllBalancesRequest',
@@ -490,7 +588,7 @@ class ChainQueryClient {
 	}
 
 	async getSpendableBalances(address: string): Promise<any> {
-		const stub = this.getStub('cosmos.bank.v1beta1.Query', {
+		const stub = this.getStubAuto('cosmos.bank.v1beta1.Query', {
 			SpendableBalances: {
 				path: '/cosmos.bank.v1beta1.Query/SpendableBalances',
 				requestType: 'cosmos.bank.v1beta1.QuerySpendableBalancesRequest',
@@ -515,7 +613,7 @@ class ChainQueryClient {
 	}
 
 	async getSupplyOf(denom: string): Promise<any> {
-		const stub = this.getStub('cosmos.bank.v1beta1.Query', {
+		const stub = this.getStubAuto('cosmos.bank.v1beta1.Query', {
 			SupplyOf: {
 				path: '/cosmos.bank.v1beta1.Query/SupplyOf',
 				requestType: 'cosmos.bank.v1beta1.QuerySupplyOfRequest',
@@ -564,14 +662,7 @@ class ChainQueryClient {
 
 	/** Fetches validators from chain, optionally filtered by status */
 	async getValidators(status?: string): Promise<any> {
-		const stub = this.getStub('cosmos.staking.v1beta1.Query', this.stakingMethods())
-
-		const statusMap: Record<string, number> = {
-			'BOND_STATUS_UNSPECIFIED': 0,
-			'BOND_STATUS_UNBONDED': 1,
-			'BOND_STATUS_UNBONDING': 2,
-			'BOND_STATUS_BONDED': 3,
-		}
+		const stub = this.getStubAuto('cosmos.staking.v1beta1.Query', this.stakingMethods())
 
 		return new Promise((resolve, reject) => {
 			stub.Validators(
@@ -612,7 +703,7 @@ class ChainQueryClient {
 
 	/** Fetches a single validator by operator address */
 	async getValidator(validatorAddr: string): Promise<any> {
-		const stub = this.getStub('cosmos.staking.v1beta1.Query', this.stakingMethods())
+		const stub = this.getStubAuto('cosmos.staking.v1beta1.Query', this.stakingMethods())
 
 		return new Promise((resolve, reject) => {
 			stub.Validator(
@@ -659,7 +750,7 @@ class ChainQueryClient {
 
 	/** Fetches the staking pool (bonded/not-bonded totals) */
 	async getStakingPool(): Promise<any> {
-		const stub = this.getStub('cosmos.staking.v1beta1.Query', this.stakingMethods())
+		const stub = this.getStubAuto('cosmos.staking.v1beta1.Query', this.stakingMethods())
 
 		return new Promise((resolve, reject) => {
 			stub.Pool({}, (err: Error | null, response: any) => {
@@ -702,7 +793,7 @@ class ChainQueryClient {
 
 	/** Fetches slashing params (signed_blocks_window, etc.) */
 	async getSlashingParams(): Promise<any> {
-		const stub = this.getStub('cosmos.slashing.v1beta1.Query', this.slashingMethods())
+		const stub = this.getStubAuto('cosmos.slashing.v1beta1.Query', this.slashingMethods())
 
 		return new Promise((resolve, reject) => {
 			stub.Params({}, (err: Error | null, response: any) => {
@@ -726,7 +817,7 @@ class ChainQueryClient {
 
 	/** Fetches signing info for a specific validator by consensus address */
 	async getSigningInfo(consAddress: string): Promise<any> {
-		const stub = this.getStub('cosmos.slashing.v1beta1.Query', this.slashingMethods())
+		const stub = this.getStubAuto('cosmos.slashing.v1beta1.Query', this.slashingMethods())
 
 		return new Promise((resolve, reject) => {
 			stub.SigningInfo({ consAddress }, (err: Error | null, response: any) => {
@@ -756,7 +847,7 @@ class ChainQueryClient {
 
 	/** Fetches signing info for all validators */
 	async getAllSigningInfos(): Promise<any> {
-		const stub = this.getStub('cosmos.slashing.v1beta1.Query', this.slashingMethods())
+		const stub = this.getStubAuto('cosmos.slashing.v1beta1.Query', this.slashingMethods())
 
 		return new Promise((resolve, reject) => {
 			stub.SigningInfos({ pagination: { limit: 500 } }, (err: Error | null, response: any) => {
@@ -784,7 +875,7 @@ class ChainQueryClient {
 		const root = this.roots.get('auth')
 		if (!root) throw new Error('Auth proto not loaded')
 
-		const stub = this.getStub('cosmos.auth.v1beta1.Query', {
+		const stub = this.getStubAuto('cosmos.auth.v1beta1.Query', {
 			Account: {
 				path: '/cosmos.auth.v1beta1.Query/Account',
 				requestType: 'cosmos.auth.v1beta1.QueryAccountRequest',
@@ -868,7 +959,7 @@ class ChainQueryClient {
 
 	/** Broadcasts a signed transaction to the chain */
 	async broadcastTx(txBytes: Buffer, mode: number = 2): Promise<any> {
-		const stub = this.getStub('cosmos.tx.v1beta1.Service', {
+		const stub = this.getStubAuto('cosmos.tx.v1beta1.Service', {
 			BroadcastTx: {
 				path: '/cosmos.tx.v1beta1.Service/BroadcastTx',
 				requestType: 'cosmos.tx.v1beta1.BroadcastTxRequest',
@@ -900,72 +991,233 @@ class ChainQueryClient {
 			})
 		})
 	}
+
+	// IBC queries
+
+	/** Fetches IBC channel info */
+	async getChannel(channelId: string, portId: string): Promise<any> {
+		const stub = this.getStub('ibc.core.channel.v1.Query', 'ibc_channel', {
+			Channel: {
+				path: '/ibc.core.channel.v1.Query/Channel',
+				requestType: 'ibc.core.channel.v1.QueryChannelRequest',
+				responseType: 'ibc.core.channel.v1.QueryChannelResponse',
+			},
+		})
+
+		return new Promise((resolve, reject) => {
+			stub.Channel({ portId, channelId }, (err: Error | null, response: any) => {
+				if (err) {
+					reject(err)
+					return
+				}
+				const ch = response.channel || {}
+				const stateMap: Record<number, string> = {
+					0: 'STATE_UNINITIALIZED_UNSPECIFIED',
+					1: 'STATE_INIT',
+					2: 'STATE_TRYOPEN',
+					3: 'STATE_OPEN',
+					4: 'STATE_CLOSED',
+				}
+				resolve({
+					channel: {
+						state: stateMap[ch.state] || String(ch.state),
+						ordering: ch.ordering,
+						counterparty: {
+							port_id: ch.counterparty?.portId || ch.counterparty?.port_id || '',
+							channel_id: ch.counterparty?.channelId || ch.counterparty?.channel_id || '',
+						},
+						connection_hops: ch.connectionHops || ch.connection_hops || [],
+						version: ch.version || '',
+					},
+				})
+			})
+		})
+	}
+
+	/** Fetches IBC channel client state (for counterparty chain ID) */
+	async getChannelClientState(channelId: string, portId: string): Promise<any> {
+		const stub = this.getStub('ibc.core.channel.v1.Query', 'ibc_channel', {
+			ChannelClientState: {
+				path: '/ibc.core.channel.v1.Query/ChannelClientState',
+				requestType: 'ibc.core.channel.v1.QueryChannelClientStateRequest',
+				responseType: 'ibc.core.channel.v1.QueryChannelClientStateResponse',
+			},
+		})
+
+		const root = this.roots.get('ibc_channel')
+
+		return new Promise((resolve, reject) => {
+			stub.ChannelClientState({ portId, channelId }, (err: Error | null, response: any) => {
+				if (err) {
+					reject(err)
+					return
+				}
+				const ics = response.identifiedClientState || response.identified_client_state || {}
+				const clientState = ics.clientState || ics.client_state || {}
+				let chainId = ''
+
+				// Try to decode the client state Any to get chain_id
+				if (clientState.value && root) {
+					try {
+						const TendermintClientState = root.lookupType('ibc.core.channel.v1.TendermintClientState')
+						const decoded = TendermintClientState.decode(clientState.value) as any
+						chainId = decoded.chain_id || decoded.chainId || ''
+					} catch {
+						// Decode failed, try typeUrl-based approach
+					}
+				}
+
+				resolve({
+					identified_client_state: {
+						client_id: ics.clientId || ics.client_id || '',
+						client_state: {
+							'@type': clientState.typeUrl || clientState.type_url || '',
+							chain_id: chainId,
+						},
+					},
+				})
+			})
+		})
+	}
+
+	/** Resolves an IBC denom hash to path + base denom */
+	async getDenomTrace(hash: string): Promise<any> {
+		const stub = this.getStub('ibc.applications.transfer.v1.Query', 'ibc_transfer', {
+			DenomTrace: {
+				path: '/ibc.applications.transfer.v1.Query/DenomTrace',
+				requestType: 'ibc.applications.transfer.v1.QueryDenomTraceRequest',
+				responseType: 'ibc.applications.transfer.v1.QueryDenomTraceResponse',
+			},
+		})
+
+		return new Promise((resolve, reject) => {
+			stub.DenomTrace({ hash }, (err: Error | null, response: any) => {
+				if (err) {
+					if (err.message?.includes('NotFound') || err.message?.includes('not found')) {
+						resolve({ denom_trace: null })
+						return
+					}
+					reject(err)
+					return
+				}
+				const trace = response.denom_trace || response.denomTrace || {}
+				resolve({
+					denom_trace: {
+						path: trace.path || '',
+						base_denom: trace.base_denom || trace.baseDenom || '',
+					},
+				})
+			})
+		})
+	}
 }
 
-// Initialize client
-let client: ChainQueryClient
+// ============================================================================
+// Multi-chain client pool
+// ============================================================================
 
-function initClient() {
-	client = new ChainQueryClient(GRPC_ENDPOINT, INSECURE)
+const clientPool = new Map<string, ChainQueryClient>()
+
+/** Get or lazily create a gRPC client for the given chain ID */
+function getClient(chainId: string): ChainQueryClient {
+	let client = clientPool.get(chainId)
+	if (!client) {
+		const cfg = getChainConfig(chainId)
+		client = new ChainQueryClient(cfg.grpcEndpoint, !cfg.tls)
+		clientPool.set(chainId, client)
+	}
+	return client
 }
 
-// Route handlers
-type RouteHandler = (params: Record<string, string>, query: URLSearchParams) => Promise<any>
+// ============================================================================
+// Route definitions
+// ============================================================================
 
-const routes: Array<{ pattern: RegExp; handler: RouteHandler }> = [
-	// GET /chain/balances/:address
+// Route handler receives chain's client, params, and query string
+type RouteHandler = (client: ChainQueryClient, params: Record<string, string>, query: URLSearchParams) => Promise<any>
+
+// Each route pattern matches the path AFTER /chain/:chainId/
+const routes: Array<{ pattern: RegExp; paramNames: string[]; handler: RouteHandler }> = [
 	{
-		pattern: /^\/chain\/balances\/([a-zA-Z0-9]+)$/,
-		handler: async (params) => client.getAllBalances(params.address),
+		pattern: /^balances\/([a-zA-Z0-9]+)$/,
+		paramNames: ['address'],
+		handler: async (c, p) => c.getAllBalances(p.address),
 	},
-	// GET /chain/spendable/:address
 	{
-		pattern: /^\/chain\/spendable\/([a-zA-Z0-9]+)$/,
-		handler: async (params) => client.getSpendableBalances(params.address),
+		pattern: /^spendable\/([a-zA-Z0-9]+)$/,
+		paramNames: ['address'],
+		handler: async (c, p) => c.getSpendableBalances(p.address),
 	},
-	// GET /chain/supply/:denom
 	{
-		pattern: /^\/chain\/supply\/([a-zA-Z0-9]+)$/,
-		handler: async (params) => client.getSupplyOf(params.denom),
+		pattern: /^supply\/([a-zA-Z0-9]+)$/,
+		paramNames: ['denom'],
+		handler: async (c, p) => c.getSupplyOf(p.denom),
 	},
-	// GET /chain/staking/validators?status=BOND_STATUS_BONDED
 	{
-		pattern: /^\/chain\/staking\/validators$/,
-		handler: async (_params, query) => client.getValidators(query.get('status') || undefined),
+		pattern: /^staking\/validators$/,
+		paramNames: [],
+		handler: async (c, _p, q) => c.getValidators(q.get('status') || undefined),
 	},
-	// GET /chain/staking/validator/:address
 	{
-		pattern: /^\/chain\/staking\/validator\/([a-zA-Z0-9]+)$/,
-		handler: async (params) => client.getValidator(params.validatorAddr),
+		pattern: /^staking\/validator\/([a-zA-Z0-9]+)$/,
+		paramNames: ['validatorAddr'],
+		handler: async (c, p) => c.getValidator(p.validatorAddr),
 	},
-	// GET /chain/staking/pool
 	{
-		pattern: /^\/chain\/staking\/pool$/,
-		handler: async () => client.getStakingPool(),
+		pattern: /^staking\/pool$/,
+		paramNames: [],
+		handler: async (c) => c.getStakingPool(),
 	},
-	// GET /chain/auth/account/:address - Get account info for signing
 	{
-		pattern: /^\/chain\/auth\/account\/([a-zA-Z0-9]+)$/,
-		handler: async (params) => client.getAccount(params.address),
+		pattern: /^auth\/account\/([a-zA-Z0-9]+)$/,
+		paramNames: ['address'],
+		handler: async (c, p) => c.getAccount(p.address),
 	},
-	// GET /chain/slashing/params - Get slashing params
 	{
-		pattern: /^\/chain\/slashing\/params$/,
-		handler: async () => client.getSlashingParams(),
+		pattern: /^slashing\/params$/,
+		paramNames: [],
+		handler: async (c) => c.getSlashingParams(),
 	},
-	// GET /chain/slashing/signing_info/:cons_address - Get signing info for validator
 	{
-		pattern: /^\/chain\/slashing\/signing_info\/([a-zA-Z0-9]+)$/,
-		handler: async (params) => client.getSigningInfo(params.consAddress),
+		pattern: /^slashing\/signing_info\/([a-zA-Z0-9]+)$/,
+		paramNames: ['consAddress'],
+		handler: async (c, p) => c.getSigningInfo(p.consAddress),
 	},
-	// GET /chain/slashing/signing_infos - Get all signing infos
 	{
-		pattern: /^\/chain\/slashing\/signing_infos$/,
-		handler: async () => client.getAllSigningInfos(),
+		pattern: /^slashing\/signing_infos$/,
+		paramNames: [],
+		handler: async (c) => c.getAllSigningInfos(),
+	},
+	// IBC endpoints
+	{
+		pattern: /^ibc\/channel\/([a-zA-Z0-9-]+)\/([a-zA-Z0-9-]+)\/client_state$/,
+		paramNames: ['channelId', 'portId'],
+		handler: async (c, p) => c.getChannelClientState(p.channelId, p.portId),
+	},
+	{
+		pattern: /^ibc\/channel\/([a-zA-Z0-9-]+)\/([a-zA-Z0-9-]+)$/,
+		paramNames: ['channelId', 'portId'],
+		handler: async (c, p) => c.getChannel(p.channelId, p.portId),
+	},
+	{
+		pattern: /^ibc\/denom_trace\/([a-fA-F0-9]+)$/,
+		paramNames: ['hash'],
+		handler: async (c, p) => c.getDenomTrace(p.hash),
 	},
 ]
 
-// Helper to read request body
+// Known endpoint prefixes -- used to distinguish endpoint names from chain IDs
+// in the backward-compat rewrite logic
+const ENDPOINT_PREFIXES = new Set([
+	'balances', 'spendable', 'supply', 'staking', 'auth', 'slashing',
+	'tx', 'health', 'ibc',
+])
+
+// ============================================================================
+// HTTP server
+// ============================================================================
+
+/** Helper to read request body */
 async function readBody(req: http.IncomingMessage): Promise<string> {
 	return new Promise((resolve, reject) => {
 		let body = ''
@@ -975,7 +1227,44 @@ async function readBody(req: http.IncomingMessage): Promise<string> {
 	})
 }
 
-// HTTP server
+/**
+ * Parse the URL to extract chain ID and the remaining endpoint path.
+ * URL format: /chain/:chainId/<endpoint> or /chain/<endpoint> (uses default chain)
+ * Returns { chainId, endpointPath } or null if the URL doesn't match /chain/...
+ */
+function parseChainUrl(pathname: string): { chainId: string; endpointPath: string } | null {
+	// Must start with /chain/
+	if (!pathname.startsWith('/chain/')) return null
+
+	// Strip /chain/ prefix
+	const rest = pathname.slice('/chain/'.length)
+	if (!rest) return null
+
+	// Split into segments
+	const firstSlash = rest.indexOf('/')
+	const firstSegment = firstSlash === -1 ? rest : rest.slice(0, firstSlash)
+	const remaining = firstSlash === -1 ? '' : rest.slice(firstSlash + 1)
+
+	// Is the first segment an endpoint name or a chain ID?
+	if (ENDPOINT_PREFIXES.has(firstSegment)) {
+		// No chain ID in URL -- use default chain
+		return { chainId: getDefaultChainId(), endpointPath: rest }
+	}
+
+	// First segment is a chain ID
+	const chainIds = getChainIds()
+	if (chainIds.has(firstSegment)) {
+		return { chainId: firstSegment, endpointPath: remaining }
+	}
+
+	// Unknown first segment -- treat as endpoint for backward compat
+	return { chainId: getDefaultChainId(), endpointPath: rest }
+}
+
+// Load config at startup to validate chains.toml early
+const chainsConfig = loadChainsConfig()
+console.log(`[ChainQuery] Loaded ${Object.keys(chainsConfig.chains).length} chain(s), default: ${chainsConfig.defaultChain}`)
+
 const server = http.createServer(async (req, res) => {
 	// CORS headers
 	res.setHeader('Access-Control-Allow-Origin', '*')
@@ -991,18 +1280,56 @@ const server = http.createServer(async (req, res) => {
 
 	const url = new URL(req.url || '/', `http://localhost:${PORT}`)
 
-	// Health check
+	// Global health check -- all chains
 	if (url.pathname === '/chain/health') {
+		const chains: Record<string, { endpoint: string; tls: boolean }> = {}
+		for (const [id, cfg] of Object.entries(chainsConfig.chains)) {
+			chains[id] = { endpoint: cfg.grpcEndpoint, tls: cfg.tls }
+		}
 		res.writeHead(200)
-		res.end(JSON.stringify({ status: 'ok', endpoint: GRPC_ENDPOINT }))
+		res.end(JSON.stringify({
+			status: 'ok',
+			defaultChain: chainsConfig.defaultChain,
+			chains,
+		}))
 		return
 	}
 
-	// POST /chain/tx/broadcast - Broadcast signed transaction via gRPC
-	// Accepts either:
-	// 1. { tx_bytes: "base64..." } - Raw protobuf-encoded tx
-	// 2. { tx: { body, auth_info, signatures }, mode: "BROADCAST_MODE_SYNC" } - JSON tx (REST API format)
-	if (url.pathname === '/chain/tx/broadcast' && req.method === 'POST') {
+	// Parse chain ID and endpoint path from URL
+	const parsed = parseChainUrl(url.pathname)
+	if (!parsed) {
+		res.writeHead(404)
+		res.end(JSON.stringify({ error: 'Not found' }))
+		return
+	}
+
+	const { chainId, endpointPath } = parsed
+
+	// Validate chain ID
+	let client: ChainQueryClient
+	try {
+		client = getClient(chainId)
+	} catch (err: any) {
+		res.writeHead(400)
+		res.end(JSON.stringify({ error: err.message }))
+		return
+	}
+
+	// Per-chain health check
+	if (endpointPath === 'health') {
+		const cfg = chainsConfig.chains[chainId]
+		res.writeHead(200)
+		res.end(JSON.stringify({
+			status: 'ok',
+			chainId,
+			endpoint: cfg?.grpcEndpoint,
+			tls: cfg?.tls,
+		}))
+		return
+	}
+
+	// POST tx/broadcast
+	if (endpointPath === 'tx/broadcast' && req.method === 'POST') {
 		try {
 			const body = await readBody(req)
 			const data = JSON.parse(body)
@@ -1027,7 +1354,6 @@ const server = http.createServer(async (req, res) => {
 
 				const messages = (tx.body?.messages || []).map((msg: any) => {
 					const typeUrl = msg['@type'] || ''
-					// For amino-signed txs, we encode the message as JSON bytes
 					const msgCopy = { ...msg }
 					delete msgCopy['@type']
 					const valueBytes = Buffer.from(JSON.stringify(msgCopy), 'utf8')
@@ -1117,30 +1443,27 @@ const server = http.createServer(async (req, res) => {
 		return
 	}
 
-	// Match GET routes
-	for (const route of routes) {
-		const match = url.pathname.match(route.pattern)
-		if (match && req.method === 'GET') {
-			const params: Record<string, string> = {}
+	// Match GET routes against the endpoint path (after chain ID)
+	if (req.method === 'GET') {
+		for (const route of routes) {
+			const match = endpointPath.match(route.pattern)
+			if (match) {
+				const params: Record<string, string> = {}
+				for (let i = 0; i < route.paramNames.length; i++) {
+					params[route.paramNames[i]] = match[i + 1]
+				}
 
-			// Extract named params based on pattern groups
-			if (url.pathname.includes('/balances/')) params.address = match[1]
-			else if (url.pathname.includes('/spendable/')) params.address = match[1]
-			else if (url.pathname.includes('/supply/')) params.denom = match[1]
-			else if (url.pathname.match(/\/staking\/validator\//)) params.validatorAddr = match[1]
-			else if (url.pathname.includes('/auth/account/')) params.address = match[1]
-			else if (url.pathname.includes('/slashing/signing_info/')) params.consAddress = match[1]
-
-			try {
-				const result = await route.handler(params, url.searchParams)
-				res.writeHead(200)
-				res.end(JSON.stringify(result))
-			} catch (err: any) {
-				console.error(`[ChainQuery] Error:`, err.message)
-				res.writeHead(500)
-				res.end(JSON.stringify({ error: err.message }))
+				try {
+					const result = await route.handler(client, params, url.searchParams)
+					res.writeHead(200)
+					res.end(JSON.stringify(result))
+				} catch (err: any) {
+					console.error(`[ChainQuery] Error (${chainId}):`, err.message)
+					res.writeHead(500)
+					res.end(JSON.stringify({ error: err.message }))
+				}
+				return
 			}
-			return
 		}
 	}
 
@@ -1148,36 +1471,30 @@ const server = http.createServer(async (req, res) => {
 	res.writeHead(404)
 	res.end(JSON.stringify({ error: 'Not found', endpoints: [
 		'GET  /chain/health',
-		'GET  /chain/balances/:address',
-		'GET  /chain/spendable/:address',
-		'GET  /chain/supply/:denom',
-		'GET  /chain/staking/validators?status=BOND_STATUS_BONDED',
-		'GET  /chain/staking/validator/:address',
-		'GET  /chain/staking/pool',
-		'GET  /chain/auth/account/:address',
-		'GET  /chain/slashing/params',
-		'GET  /chain/slashing/signing_info/:cons_address',
-		'GET  /chain/slashing/signing_infos',
-		'POST /chain/tx/broadcast',
+		'GET  /chain/:chainId/health',
+		'GET  /chain/:chainId/balances/:address',
+		'GET  /chain/:chainId/spendable/:address',
+		'GET  /chain/:chainId/supply/:denom',
+		'GET  /chain/:chainId/staking/validators?status=BOND_STATUS_BONDED',
+		'GET  /chain/:chainId/staking/validator/:address',
+		'GET  /chain/:chainId/staking/pool',
+		'GET  /chain/:chainId/auth/account/:address',
+		'GET  /chain/:chainId/slashing/params',
+		'GET  /chain/:chainId/slashing/signing_info/:cons_address',
+		'GET  /chain/:chainId/slashing/signing_infos',
+		'GET  /chain/:chainId/ibc/channel/:channelId/:portId',
+		'GET  /chain/:chainId/ibc/channel/:channelId/:portId/client_state',
+		'GET  /chain/:chainId/ibc/denom_trace/:hash',
+		'POST /chain/:chainId/tx/broadcast',
 	]}))
 })
 
 // Start server
-initClient()
 server.listen(PORT, () => {
 	console.log(`[ChainQuery] Running on port ${PORT}`)
-	console.log(`[ChainQuery] gRPC endpoint: ${GRPC_ENDPOINT}`)
-	console.log(`[ChainQuery] Endpoints:`)
-	console.log(`  GET  /chain/health`)
-	console.log(`  GET  /chain/balances/:address`)
-	console.log(`  GET  /chain/spendable/:address`)
-	console.log(`  GET  /chain/supply/:denom`)
-	console.log(`  GET  /chain/staking/validators`)
-	console.log(`  GET  /chain/staking/validator/:address`)
-	console.log(`  GET  /chain/staking/pool`)
-	console.log(`  GET  /chain/auth/account/:address`)
-	console.log(`  GET  /chain/slashing/params`)
-	console.log(`  GET  /chain/slashing/signing_info/:cons_address`)
-	console.log(`  GET  /chain/slashing/signing_infos`)
-	console.log(`  POST /chain/tx/broadcast`)
+	console.log(`[ChainQuery] Default chain: ${chainsConfig.defaultChain}`)
+	for (const [id, cfg] of Object.entries(chainsConfig.chains)) {
+		console.log(`[ChainQuery]   ${id}: ${cfg.grpcEndpoint} (tls: ${cfg.tls})`)
+	}
+	console.log(`[ChainQuery] Endpoints: /chain/:chainId/<endpoint> (or /chain/<endpoint> for default)`)
 })

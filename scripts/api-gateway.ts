@@ -66,7 +66,8 @@ const CACHE_TIERS: Record<string, CacheTier> = {
 /** Routes that should never be cached */
 function shouldSkipCache(method: string, url: string): boolean {
 	if (method !== 'GET') return true
-	if (url.startsWith('/chain/tx/')) return true
+	// Skip cache for tx broadcast (both /chain/tx/ and /chain/:chainId/tx/)
+	if (/^\/chain\/([^/]+\/)?tx\//.test(url)) return true
 	if (url === '/cache/stats') return true
 	return false
 }

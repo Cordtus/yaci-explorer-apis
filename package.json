@@ -24,7 +24,8 @@
 		"ethers": "^6.15.0",
 		"pg": "^8.13.0",
 		"postgres": "^3.4.8",
-		"protobufjs": "^7.4.0"
+		"protobufjs": "^7.4.0",
+		"smol-toml": "^1.6.0"
 	},
 	"devDependencies": {
 		"@types/pg": "^8.11.0",

@@ -1,0 +1,6 @@
+default_chain = "republic_77701-1"
+
+[chains.republic_77701-1]
+grpc_endpoint = "grpc.republicai.io:443"
+tls = true
+bech32_cons_prefix = "raivalcons"
