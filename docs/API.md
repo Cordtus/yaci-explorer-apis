@@ -169,7 +169,8 @@ Access via `{BASE_URL}/{view_name}?select=*&order=...&limit=...`
 
 | View | Description |
 |------|-------------|
-| `chain_stats` | Latest block, total txs, unique addresses, avg block time, active validators |
+| `chain_stats` | Counters: `latest_block`, `total_transactions`, `unique_addresses`, `evm_transactions`, `active_validators` (block time comes from `get_block_time_analysis()`) |
+| `daily_active_addresses` | `date`, `active_addresses` — distinct senders per day |
 | `tx_volume_daily` | Daily transaction counts |
 | `tx_volume_hourly` | Hourly transaction counts |
 | `message_type_stats` | Message type distribution (type, count) |
@@ -238,6 +239,40 @@ All materialized views have unique indexes for `REFRESH CONCURRENTLY` support.
 | `validator_rewards` | Per-block validator rewards and commission |
 | `finalize_block_events` | Consensus events from block results (slash, jail, liveness, rewards) |
 | `block_metrics` | Per-block metrics (tx count, gas used, event counts) |
+
+### Capability & Configuration
+
+| Table | Description |
+|-------|-------------|
+| `chain_features` | `chain_id`, `features text[]` — modules this deployment serves (e.g. `{evm,ibc}`). Seeded by `scripts/deploy.sh`; the frontend gates UI on it. |
+| `chain_params` | Key/value chain params from `chain-params-daemon` (`bond_denom`, `unbonding_time`, `max_validators`). |
+
+## Chain Query Service (gRPC proxy)
+
+Live gRPC queries are served outside PostgREST by `scripts/chain-query-service.ts`,
+fronted by `scripts/api-gateway.ts` at `/chain/*`:
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /chain/balances/:address` | Account balances |
+| `GET /chain/staking/validators?status=...` | Validators |
+| `GET /chain/staking/validator/:address` | Single validator |
+| `GET /chain/staking/pool` | Staking pool |
+| `GET /chain/auth/account/:address` | Account info (for signing) |
+| `GET /chain/slashing/params` | Slashing params |
+| `GET /chain/slashing/signing_info/:cons_address` | Validator signing info |
+| `GET /chain/slashing/signing_infos` | All signing infos |
+| `POST /chain/tx/broadcast` | Broadcast a signed transaction |
+
+The frontend exposes this as `chainQueryBaseUrl` (`{apiUrl}/chain` by default, or
+`chainQueryUrl` in its `/config.json`).
+
+## EVM gating
+
+EVM decode is opt-in per deployment: `evm` must be listed in `CHAIN_FEATURES` /
+`api.chain_features`. `scripts/deploy.sh` installs the `yaci-evm-decode` /
+`yaci-evm-priority` systemd units but only enables them when `evm` is advertised,
+and the frontend hides EVM routes/components unless the flag is present.
 
 ## Pagination
 
