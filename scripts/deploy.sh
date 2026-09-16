@@ -123,9 +123,12 @@ seed_chain_features() {
     info "Advertising chain features: ${CHAIN_FEATURES}"
     local pg_array
     pg_array="{$(echo "$CHAIN_FEATURES" | tr -d ' ')}"
-    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
-        -v cid="$CHAIN_ID" -v feats="$pg_array" \
-        -c "INSERT INTO api.chain_features (chain_id, features) VALUES (:'cid', :'feats'::text[]) ON CONFLICT (chain_id) DO UPDATE SET features = EXCLUDED.features;"
+    # psql only interpolates :'vars' from stdin/-f, not -c.
+    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -v cid="$CHAIN_ID" -v feats="$pg_array" <<'SQL'
+INSERT INTO api.chain_features (chain_id, features)
+VALUES (:'cid', :'feats'::text[])
+ON CONFLICT (chain_id) DO UPDATE SET features = EXCLUDED.features;
+SQL
     success "Chain features seeded for ${CHAIN_ID}"
 }
 
@@ -208,6 +211,10 @@ EOF
 enable_services() {
     source_config
     info "Enabling services..."
+    if ! systemctl list-unit-files 2>/dev/null | grep -q '^yaci-chain-params'; then
+        warning "systemd units not installed yet; run 'install' first. Skipping enable."
+        return
+    fi
     systemctl enable yaci-chain-params
     # EVM workers only run for networks advertising the 'evm' feature.
     if has_feature evm; then
