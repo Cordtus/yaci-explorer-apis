@@ -1419,7 +1419,7 @@ npx tsx scripts/decode-evm-daemon.ts &
 # Run frontend locally
 cd yaci-explorer
 echo "VITE_POSTGREST_URL=http://localhost:3000" > .env.local
-yarn dev
+bun run dev
 ```
 
 ### Testing Changes
@@ -1429,7 +1429,7 @@ yarn dev
 cd yaci-explorer-apis
 
 # Type check
-yarn typecheck
+bun run typecheck
 
 # Test migration
 cat migrations/00X_test.sql | psql $DATABASE_URL
@@ -1444,13 +1444,13 @@ npx tsx scripts/decode-evm-daemon.ts
 cd yaci-explorer
 
 # Type check
-yarn typecheck
+bun run typecheck
 
 # Build test
-yarn build
+bun run build
 
 # Run tests (if implemented)
-yarn test
+bun run typecheck
 ```
 
 ### Creating New Migrations
@@ -1491,7 +1491,7 @@ cat migrations/004_new_feature.sql | fly postgres connect -a republic-yaci-pg
 - Triggers: Pull requests to main, pushes to main
 - Steps:
   1. Checkout code
-  2. Setup Node.js 20 with yarn cache
+  2. Setup Node.js 20 with Bun cache
   3. Install dependencies
   4. Type check with TypeScript
   5. Validate migration files (BEGIN/COMMIT checks)

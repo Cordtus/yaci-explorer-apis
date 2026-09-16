@@ -75,7 +75,7 @@ docker compose logs -f --tail=100
 
 ```bash
 cd ~/repos/yaci-explorer-apis
-yarn install
+bun install
 ```
 
 ### Run Migrations
@@ -144,7 +144,7 @@ fly postgres connect -a yaci-postgrest-db
 
 ```bash
 cd ~/repos/yaci-explorer-apis
-yarn decode:evm
+bun run decode:evm
 ```
 
 Expected output:
@@ -186,7 +186,7 @@ Create systemd service or cron:
 ```bash
 # Cron (every 5 minutes)
 crontab -e
-*/5 * * * * cd ~/repos/yaci-explorer-apis && DATABASE_URL="..." yarn decode:evm >> /var/log/evm-decode.log 2>&1
+*/5 * * * * cd ~/repos/yaci-explorer-apis && DATABASE_URL="..." bun run decode:evm >> /var/log/evm-decode.log 2>&1
 ```
 
 Or systemd timer (better for long-running):
@@ -201,7 +201,7 @@ After=network.target
 Type=oneshot
 WorkingDirectory=/home/user/repos/yaci-explorer-apis
 Environment="DATABASE_URL=postgres://..."
-ExecStart=/usr/bin/yarn decode:evm
+ExecStart=/usr/bin/bun run decode:evm
 User=user
 
 # /etc/systemd/system/evm-decode.timer
@@ -230,7 +230,7 @@ sudo systemctl status evm-decode.timer
 
 ```bash
 cd ~/repos/yaci-explorer
-yarn build
+bun run build
 fly deploy
 ```
 
@@ -326,7 +326,7 @@ SELECT COUNT(*) FROM api.evm_transactions;
 
 # If 0, run manually
 cd ~/repos/yaci-explorer-apis
-DATABASE_URL="..." yarn decode:evm
+DATABASE_URL="..." bun run decode:evm
 ```
 
 ### Logs not appearing
@@ -339,7 +339,7 @@ SELECT data->'txResponse'->>'data' FROM api.transactions_raw WHERE id = '<TX_HAS
 # If null, Yaci may not be capturing it
 
 # Check decode worker proto parsing
-yarn decode:evm 2>&1 | grep -i error
+bun run decode:evm 2>&1 | grep -i error
 ```
 
 ### Frontend shows "EVM data not available"

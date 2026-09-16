@@ -22,17 +22,17 @@ EVM transaction decoder worker that extracts transaction data and logs from Yaci
 
 ```bash
 # One-time decode
-DATABASE_URL="postgres://user:pass@host:5432/yaci" yarn decode:evm
+DATABASE_URL="postgres://user:pass@host:5432/yaci" bun run decode:evm
 
 # With explicit config
-DATABASE_URL="postgres://..." yarn decode:evm
+DATABASE_URL="postgres://..." bun run decode:evm
 ```
 
 ### Continuous Operation
 
 **Cron (simple)**:
 ```bash
-*/5 * * * * cd /path/to/yaci-explorer-apis && DATABASE_URL="..." yarn decode:evm
+*/5 * * * * cd /path/to/yaci-explorer-apis && DATABASE_URL="..." bun run decode:evm
 ```
 
 **Systemd (recommended)**:
