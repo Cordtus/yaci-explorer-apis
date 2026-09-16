@@ -1,8 +1,13 @@
-#!/usr/bin/env npx tsx
+#!/usr/bin/env bun
 import pg from 'pg'
 const { Pool } = pg
 
-const DATABASE_URL = process.env.DATABASE_URL || 'postgres://postgres:bOqwmcryOQcdmrO@localhost:15432/postgres?sslmode=disable'
+const DATABASE_URL = process.env.DATABASE_URL
+
+if (!DATABASE_URL) {
+	console.error('ERROR: DATABASE_URL environment variable is required')
+	process.exit(1)
+}
 
 async function main() {
 	const pool = new Pool({ connectionString: DATABASE_URL })

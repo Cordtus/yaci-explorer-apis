@@ -5,7 +5,7 @@
  */
 
 import pg from 'pg'
-import { Transaction, hexlify, keccak256, getAddress, getCreateAddress } from 'ethers'
+import { Transaction, hexlify, keccak256, getAddress } from 'ethers'
 
 const DATABASE_URL = process.env.DATABASE_URL
 
@@ -104,7 +104,7 @@ async function decodeSingleTransaction(txId: string): Promise<{
 
   try {
     const pending = await client.query(
-      `SELECT tx_id, height, raw_bytes, gas_used
+      `SELECT tx_id, raw_bytes, gas_used
        FROM api.evm_pending_decode
        WHERE tx_id = $1
        LIMIT 1`,
@@ -171,19 +171,8 @@ async function decodeSingleTransaction(txId: string): Promise<{
       ]
     )
 
-    // Detect contract deployment (to === null)
-    if (decoded.to === null && decoded.status === 1) {
-      const contractAddress = getCreateAddress({ from: decoded.from, nonce: decoded.nonce })
-      const bytecodeHash = decoded.data ? keccak256(decoded.data) : null
-
-      await client.query(
-        `INSERT INTO api.evm_contracts (address, creator, creation_tx, creation_height, bytecode_hash)
-         VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT (address) DO NOTHING`,
-        [contractAddress.toLowerCase(), decoded.from.toLowerCase(), txId, row.height, bytecodeHash]
-      )
-      console.log(`[Priority EVM Decoder] Contract deployed: ${contractAddress}`)
-    }
+    // Note: No need to delete from evm_pending_decode - it's a VIEW that automatically
+    // excludes transactions once they exist in evm_transactions
 
     await client.query('COMMIT')
 

@@ -1,4 +1,4 @@
-#!/usr/bin/env npx tsx
+#!/usr/bin/env bun
 /**
  * EVM Transaction Decode Daemon
  *
@@ -11,35 +11,21 @@ import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import pg from 'pg'
 import protobuf from 'protobufjs'
-import { Transaction, keccak256, hexlify, getAddress, getCreateAddress, JsonRpcProvider, Contract } from 'ethers'
+import { Transaction, keccak256, hexlify, getAddress } from 'ethers'
 
 const { Pool } = pg
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 
-const DATABASE_URL = process.env.DATABASE_URL || 'postgres://postgres:bOqwmcryOQcdmrO@localhost:15432/postgres?sslmode=disable'
+const DATABASE_URL = process.env.DATABASE_URL
+
+if (!DATABASE_URL) {
+	console.error('DATABASE_URL environment variable is required')
+	process.exit(1)
+}
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS || '5000', 10) // Default 5 seconds
 const BATCH_SIZE = parseInt(process.env.BATCH_SIZE || '100', 10)
-const EVM_RPC_URL = process.env.EVM_RPC_URL || '' // Optional: for fetching token metadata
-
-// ERC-20 ABI for metadata fetching
-const ERC20_ABI = [
-	'function name() view returns (string)',
-	'function symbol() view returns (string)',
-	'function decimals() view returns (uint8)',
-	'function totalSupply() view returns (uint256)',
-]
-
-// Provider for token metadata (lazy initialized)
-let evmProvider: JsonRpcProvider | null = null
-function getEvmProvider(): JsonRpcProvider | null {
-	if (!EVM_RPC_URL) return null
-	if (!evmProvider) {
-		evmProvider = new JsonRpcProvider(EVM_RPC_URL)
-	}
-	return evmProvider
-}
 
 interface DecodedTx {
 	tx_id: string
@@ -70,52 +56,6 @@ interface DecodedLog {
 }
 
 let sigCache: Map<string, string> = new Map()
-let tokenMetadataCache: Map<string, { name: string | null; symbol: string | null; decimals: number | null }> = new Map()
-
-/**
- * Fetch ERC-20 token metadata via RPC
- */
-async function fetchTokenMetadata(tokenAddress: string): Promise<{ name: string | null; symbol: string | null; decimals: number | null }> {
-	// Check cache first
-	if (tokenMetadataCache.has(tokenAddress)) {
-		return tokenMetadataCache.get(tokenAddress)!
-	}
-
-	const provider = getEvmProvider()
-	if (!provider) {
-		return { name: null, symbol: null, decimals: null }
-	}
-
-	try {
-		const contract = new Contract(tokenAddress, ERC20_ABI, provider)
-		const [name, symbol, decimals] = await Promise.allSettled([
-			contract.name(),
-			contract.symbol(),
-			contract.decimals(),
-		])
-
-		const metadata = {
-			name: name.status === 'fulfilled' ? name.value : null,
-			symbol: symbol.status === 'fulfilled' ? symbol.value : null,
-			decimals: decimals.status === 'fulfilled' ? Number(decimals.value) : null,
-		}
-
-		tokenMetadataCache.set(tokenAddress, metadata)
-		return metadata
-	} catch (err) {
-		console.error(`Failed to fetch token metadata for ${tokenAddress}:`, err)
-		const fallback = { name: null, symbol: null, decimals: null }
-		tokenMetadataCache.set(tokenAddress, fallback)
-		return fallback
-	}
-}
-
-/**
- * Compute deployed contract address from sender and nonce
- */
-function computeContractAddress(from: string, nonce: number): string {
-	return getCreateAddress({ from, nonce })
-}
 
 async function fetch4ByteSignature(selector: string): Promise<string | null> {
 	if (sigCache.has(selector)) {
@@ -225,7 +165,7 @@ async function processBatch(pool: pg.Pool, root: protobuf.Root): Promise<number>
 		await client.query('BEGIN')
 
 		for (const row of pending.rows) {
-			const { tx_id, height, raw_bytes, gas_used } = row
+			const { tx_id, raw_bytes, gas_used } = row
 
 			const decoded = decodeTransaction(raw_bytes, tx_id, gas_used)
 			if (!decoded) {
@@ -239,13 +179,15 @@ async function processBatch(pool: pg.Pool, root: protobuf.Root): Promise<number>
 				continue
 			}
 
+			// Collect logs in memory first; they depend on the evm_transactions FK
+			const pendingLogs: DecodedLog[] = []
+
 			const responseQuery = await client.query(
-				'SELECT data->\'txResponse\'->>\'data\' as response_data FROM api.transactions_raw WHERE id = $1',
+				'SELECT data->\'tx_response\'->\'data\' as response_data FROM api.transactions_raw WHERE id = $1',
 				[tx_id]
 			)
 
-			// Enrich with response data if available (gas_used, status, logs)
-			let decodedLogs: DecodedLog[] = []
+			// Enrich with response data if available
 			if (responseQuery.rows.length > 0 && responseQuery.rows[0].response_data) {
 				const responseHex = responseQuery.rows[0].response_data
 				const decodedResponse = await decodeTxResponse(responseHex, root)
@@ -253,16 +195,12 @@ async function processBatch(pool: pg.Pool, root: protobuf.Root): Promise<number>
 				if (decodedResponse) {
 					decoded.gas_used = decodedResponse.gasUsed
 					decoded.status = decodedResponse.vmError ? 0 : 1
-					decodedLogs = decodedResponse.logs
-				}
-			}
 
-			// Detect contract deployment (to === null)
-			let contractAddress: string | null = null
-			let bytecodeHash: string | null = null
-			if (decoded.to === null && decoded.status === 1) {
-				contractAddress = computeContractAddress(decoded.from, decoded.nonce)
-				bytecodeHash = decoded.data ? keccak256(decoded.data) : null
+					for (const log of decodedResponse.logs) {
+						log.tx_id = tx_id
+						pendingLogs.push(log)
+					}
+				}
 			}
 
 			// Lookup function signature if we have call data (skip for contract deployments)
@@ -275,7 +213,7 @@ async function processBatch(pool: pg.Pool, root: protobuf.Root): Promise<number>
 				}
 			}
 
-			// Insert transaction FIRST (parent record for evm_logs FK)
+			// Insert the parent row FIRST (evm_logs has FK to evm_transactions)
 			await client.query(
 				`INSERT INTO api.evm_transactions (
 					tx_id, hash, "from", "to", nonce, gas_limit, gas_price,
@@ -304,21 +242,12 @@ async function processBatch(pool: pg.Pool, root: protobuf.Root): Promise<number>
 				]
 			)
 
-			// Insert contract record if this was a deployment
-			if (contractAddress) {
-				await client.query(
-					`INSERT INTO api.evm_contracts (address, creator, creation_tx, creation_height, bytecode_hash)
-					 VALUES ($1, $2, $3, $4, $5)
-					 ON CONFLICT (address) DO NOTHING`,
-					[contractAddress.toLowerCase(), decoded.from.toLowerCase(), tx_id, height, bytecodeHash]
-				)
-				console.log(`  Contract deployed: ${contractAddress}`)
-			}
+			// Now insert logs and token transfers (parent row exists)
+			const TRANSFER_SIG = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef' // ERC-20/721
+			const TRANSFER_SINGLE_SIG = '0xc3d58168c5ae7397731d063d5bbf3d657854427343f4c083240f7aacaa2d0f62' // ERC-1155
+			const TRANSFER_BATCH_SIG = '0x4a39dc06d4c0dbc64b70af90fd698a233a518aa5d07e595d983b8c0526c8f7fb' // ERC-1155
 
-			// Insert logs and token transfers (evm_logs FK -> evm_transactions)
-			const TRANSFER_SIG = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef'
-			for (const log of decodedLogs) {
-				log.tx_id = tx_id
+			for (const log of pendingLogs) {
 				await client.query(
 					`INSERT INTO api.evm_logs (tx_id, log_index, address, topics, data)
 					 VALUES ($1, $2, $3, $4, $5)
@@ -326,28 +255,76 @@ async function processBatch(pool: pg.Pool, root: protobuf.Root): Promise<number>
 					[log.tx_id, log.log_index, log.address, log.topics, log.data]
 				)
 
+				// ERC-20 or ERC-721 Transfer event
 				if (log.topics[0] === TRANSFER_SIG && log.topics.length >= 3) {
-					const fromAddr = '0x' + log.topics[1].slice(26)
-					const toAddr = '0x' + log.topics[2].slice(26)
-					const value = log.data || '0x0'
+					const fromAddr = '0x' + log.topics[1].slice(26).toLowerCase()
+					const toAddr = '0x' + log.topics[2].slice(26).toLowerCase()
 
-					// Insert token FIRST (evm_token_transfers has FK to evm_tokens.address)
-					const tokenMetadata = await fetchTokenMetadata(log.address)
-					await client.query(
-						`INSERT INTO api.evm_tokens (address, type, name, symbol, decimals, first_seen_tx, first_seen_height)
-						 VALUES ($1, 'ERC20', $2, $3, $4, $5, $6)
-						 ON CONFLICT (address) DO UPDATE SET
-						   name = COALESCE(api.evm_tokens.name, EXCLUDED.name),
-						   symbol = COALESCE(api.evm_tokens.symbol, EXCLUDED.symbol),
-						   decimals = COALESCE(api.evm_tokens.decimals, EXCLUDED.decimals)`,
-						[log.address, tokenMetadata.name, tokenMetadata.symbol, tokenMetadata.decimals, tx_id, height]
-					)
+					// ERC-721: has 4 topics (tokenId in topics[3])
+					// ERC-20: has 3 topics (value in data)
+					const isERC721 = log.topics.length === 4
+					const tokenType = isERC721 ? 'ERC721' : 'ERC20'
+					const value = isERC721 ? log.topics[3] : (log.data || '0x0')
 
 					await client.query(
 						`INSERT INTO api.evm_token_transfers (tx_id, log_index, token_address, from_address, to_address, value)
 						 VALUES ($1, $2, $3, $4, $5, $6)
 						 ON CONFLICT (tx_id, log_index) DO NOTHING`,
 						[tx_id, log.log_index, log.address, fromAddr, toAddr, value]
+					)
+
+					await client.query(
+						`INSERT INTO api.evm_tokens (address, type, is_verified)
+						 VALUES ($1, $2, false)
+						 ON CONFLICT (address) DO UPDATE SET type = EXCLUDED.type WHERE api.evm_tokens.type = 'ERC20' AND EXCLUDED.type = 'ERC721'`,
+						[log.address, tokenType]
+					)
+				}
+
+				// ERC-1155 TransferSingle event
+				// topics: [sig, operator, from, to], data: [id (uint256), value (uint256)]
+				if (log.topics[0] === TRANSFER_SINGLE_SIG && log.topics.length === 4) {
+					const fromAddr = '0x' + log.topics[2].slice(26).toLowerCase()
+					const toAddr = '0x' + log.topics[3].slice(26).toLowerCase()
+					// Data contains id and value, each 32 bytes (64 hex chars)
+					const tokenId = log.data ? '0x' + log.data.slice(2, 66) : '0x0'
+					const value = log.data ? '0x' + log.data.slice(66, 130) : '0x0'
+
+					await client.query(
+						`INSERT INTO api.evm_token_transfers (tx_id, log_index, token_address, from_address, to_address, value)
+						 VALUES ($1, $2, $3, $4, $5, $6)
+						 ON CONFLICT (tx_id, log_index) DO NOTHING`,
+						[tx_id, log.log_index, log.address, fromAddr, toAddr, `${tokenId}:${value}`]
+					)
+
+					await client.query(
+						`INSERT INTO api.evm_tokens (address, type, is_verified)
+						 VALUES ($1, 'ERC1155', false)
+						 ON CONFLICT (address) DO NOTHING`,
+						[log.address]
+					)
+				}
+
+				// ERC-1155 TransferBatch event
+				// topics: [sig, operator, from, to], data: [ids[], values[]]
+				if (log.topics[0] === TRANSFER_BATCH_SIG && log.topics.length === 4) {
+					const fromAddr = '0x' + log.topics[2].slice(26).toLowerCase()
+					const toAddr = '0x' + log.topics[3].slice(26).toLowerCase()
+					// Store the entire batch data as value (complex to parse individually)
+					const batchData = log.data || '0x0'
+
+					await client.query(
+						`INSERT INTO api.evm_token_transfers (tx_id, log_index, token_address, from_address, to_address, value)
+						 VALUES ($1, $2, $3, $4, $5, $6)
+						 ON CONFLICT (tx_id, log_index) DO NOTHING`,
+						[tx_id, log.log_index, log.address, fromAddr, toAddr, `batch:${batchData}`]
+					)
+
+					await client.query(
+						`INSERT INTO api.evm_tokens (address, type, is_verified)
+						 VALUES ($1, 'ERC1155', false)
+						 ON CONFLICT (address) DO NOTHING`,
+						[log.address]
 					)
 				}
 			}
@@ -370,7 +347,6 @@ async function main() {
 	console.log(`Database: ${DATABASE_URL.replace(/:[^:@]+@/, ':***@')}`)
 	console.log(`Poll interval: ${POLL_INTERVAL_MS}ms`)
 	console.log(`Batch size: ${BATCH_SIZE}`)
-	console.log(`EVM RPC: ${EVM_RPC_URL || '(not configured - token metadata will not be fetched)'}`)
 
 	const pool = new Pool({ connectionString: DATABASE_URL })
 

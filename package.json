@@ -7,20 +7,20 @@
 		"packages/*"
 	],
 	"scripts": {
-		"build": "yarn workspace @yaci/client build",
-		"typecheck": "yarn workspace @yaci/client typecheck",
+		"build": "bun run --filter @yaci/client build",
+		"typecheck": "bun run --filter @yaci/client typecheck",
 		"migrate": "./scripts/migrate.sh",
 		"migrate:dry": "./scripts/migrate.sh --dry-run",
-		"decode:evm": "npx tsx scripts/decode-evm.ts",
-		"decode:evm:daemon": "npx tsx scripts/decode-evm-daemon.ts",
-		"decode:evm:priority": "npx tsx scripts/decode-evm-single.ts",
-		"chain-params": "npx tsx scripts/chain-params-daemon.ts",
-		"backfill:evm": "npx tsx scripts/backfill-evm-contracts.ts",
-		"backfill:evm:logs": "npx tsx scripts/backfill-evm-logs.ts",
-		"test:evm-hash-lookup": "npx tsx scripts/test-evm-hash-lookup.ts"
+		"decode:evm": "bun run scripts/decode-evm.ts",
+		"decode:evm:daemon": "bun run scripts/decode-evm-daemon.ts",
+		"decode:evm:priority": "bun run scripts/decode-evm-single.ts",
+		"chain-params": "bun run scripts/chain-params-daemon.ts",
+		"backfill:evm": "bun run scripts/backfill-evm-contracts.ts",
+		"backfill:evm:logs": "bun run scripts/backfill-evm-logs.ts",
+		"test:evm-hash-lookup": "bun run scripts/test-evm-hash-lookup.ts"
 	},
 	"dependencies": {
-		"@grpc/grpc-js": "^1.12.0",
+		"@grpc/grpc-js": "^1.14.1",
 		"bech32": "^2.0.0",
 		"ethers": "^6.15.0",
 		"pg": "^8.13.0",
@@ -28,8 +28,8 @@
 		"protobufjs": "^7.4.0"
 	},
 	"devDependencies": {
+		"@types/bun": "latest",
 		"@types/pg": "^8.11.0",
-		"tsx": "^4.19.0",
 		"typescript": "^5.6.0"
 	}
 }

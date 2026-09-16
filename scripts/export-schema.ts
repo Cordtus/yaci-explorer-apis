@@ -1,9 +1,14 @@
-#!/usr/bin/env npx tsx
+#!/usr/bin/env bun
 import pg from 'pg'
 import { writeFileSync } from 'fs'
 const { Pool } = pg
 
-const DATABASE_URL = process.env.DATABASE_URL || 'postgres://postgres:bOqwmcryOQcdmrO@localhost:15432/postgres?sslmode=disable'
+const DATABASE_URL = process.env.DATABASE_URL
+
+if (!DATABASE_URL) {
+	console.error('ERROR: DATABASE_URL environment variable is required')
+	process.exit(1)
+}
 
 async function main() {
 	const pool = new Pool({ connectionString: DATABASE_URL })
@@ -38,7 +43,7 @@ async function main() {
 		}
 
 		writeFileSync('migrations/current_schema.sql', output)
-		console.log('✓ Schema exported to migrations/current_schema.sql')
+		console.log('[+] Schema exported to migrations/current_schema.sql')
 
 	} finally {
 		await pool.end()

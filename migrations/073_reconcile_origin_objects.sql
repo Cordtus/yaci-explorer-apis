@@ -1159,6 +1159,8 @@ GRANT EXECUTE ON FUNCTION api.get_ibc_volume_timeseries(integer, text) TO web_an
 
 GRANT EXECUTE ON FUNCTION api.get_ibc_heatmap_data(text, text, text, text) TO web_anon;
 
+CREATE INDEX IF NOT EXISTS idx_tx_error_not_null ON api.transactions_main(id) WHERE error IS NOT NULL;
+
 -- =============================================================================
 -- CHAIN FEATURES (capability advertisement for the frontend)
 -- =============================================================================

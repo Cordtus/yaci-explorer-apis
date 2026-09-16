@@ -4,10 +4,12 @@ node_modules/
 dist/
 
 # Internal/development docs
-.claude/
 CLAUDE.md
+AGENTS.md
+.dev/
 .claude/
+.serena/
+.playwright-mcp/
 MIGRATION_PLAN.md
 TODO.md
-.serena/
 *.png
