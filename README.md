@@ -11,7 +11,7 @@ Blockchain gRPC -> [yaci indexer] -> PostgreSQL raw tables
                                          |
                                     [workers] -> EVM decoded tables
                                          |
-                                    PostgREST -> [this package's client] -> Frontend
+                                    PostgREST -> [yaci-explorer frontend]
 ```
 
 ### System Components
@@ -20,7 +20,7 @@ Blockchain gRPC -> [yaci indexer] -> PostgreSQL raw tables
 |-----------|------------|---------|
 | **Indexer** | [yaci](https://github.com/Cordtus/yaci) | Go service: gRPC -> PostgreSQL raw tables |
 | **Middleware** (this repo) | yaci-explorer-apis | SQL functions, views, triggers, EVM workers, TypeScript client |
-| **Frontend** | [yaci-explorer](https://github.com/Cordtus/yaci-explorer) | React UI consuming PostgREST via the client |
+| **Frontend** | [yaci-explorer](https://github.com/Cordtus/yaci-explorer) | React UI consuming PostgREST directly (`src/lib/api.ts`); `@yaci/client` is optional |
 
 ## What This Package Provides
 
@@ -30,12 +30,14 @@ Blockchain gRPC -> [yaci indexer] -> PostgreSQL raw tables
 - **EVM decode workers** for decoding Ethereum transactions, logs, and tokens
 - **Chain params daemon** for IBC denom resolution and chain parameter tracking
 - **Reactive updates** via pg_notify for real-time validator state changes
-- **TypeScript client** (`@yaci/client`) for typed frontend access
+- **TypeScript client** (`@yaci/client`) for typed frontend access (optional)
+- **Capability advertisement** via `api.chain_features` so the frontend gates UI per deployment
+- **Chain query service** (gRPC proxy) for live balances, staking, slashing, auth, and tx broadcast
 
 ## Directory Structure
 
 ```
-migrations/          SQL schema, functions, views, triggers (001-053)
+migrations/          SQL schema, functions, views, triggers (000-074, incremental)
 packages/client/     TypeScript client - thin RPC wrappers, zero deps
 scripts/             Migration runner, EVM decode daemons, utilities
 docker/              Dockerfile for multi-process deployment
@@ -105,19 +107,17 @@ const overview = await client.getNetworkOverview()
 
 ## Deployment
 
-Deployed to Fly.io with three processes:
-
-| Process | Purpose | Memory |
-|---------|---------|--------|
-| `app` | PostgREST API server (port 3000) | 256MB |
-| `worker` | EVM decode daemon (batch processing) | 512MB |
-| `priority_decoder` | Priority EVM decode (NOTIFY/LISTEN) | 512MB |
+Deployed to an LXD container (`yaci`) via `scripts/deploy.sh` (run by CI over SSH
+on pushes to `main`, not Fly.io):
 
 ```bash
-fly deploy
-fly secrets set PGRST_DB_URI="postgresql://..."
-fly secrets set DATABASE_URL="postgresql://..."
+lxc exec yaci -- /opt/yaci-explorer-apis/scripts/deploy.sh deploy main
 ```
+
+`deploy.sh` git-pulls, backs up, runs migrations, seeds `api.chain_features`
+from `CHAIN_ID`/`CHAIN_FEATURES`, and manages systemd services
+(`yaci-chain-params`; the EVM decoders are installed but only enabled when `evm`
+is advertised).
 
 ## Database Schema
 
