@@ -246,8 +246,6 @@ $$ LANGUAGE plpgsql;
 -- ============================================================================
 
 -- Ensure validator_stats view still exists with all columns (including inactive_validators from 045)
-DROP VIEW IF EXISTS api.validator_stats;
-
 DROP VIEW IF EXISTS api.validator_stats CASCADE;
 
 CREATE VIEW api.validator_stats AS

@@ -404,7 +404,7 @@ export interface EvmToken {
 	decimals: number | null
 	type: 'ERC20' | 'ERC721' | 'ERC1155'
 	total_supply: string | null
-	verified: boolean
+	verified: boolean | null
 }
 
 export interface EvmTokenTransfer {

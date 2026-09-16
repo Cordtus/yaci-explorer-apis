@@ -212,7 +212,14 @@ async function decodeTxResponse(
 		const TxMsgData = root.lookupType('cosmos.evm.vm.v1.TxMsgData')
 		const txMsgData = TxMsgData.decode(bytes) as any
 
+		if (!txMsgData.msgResponses || txMsgData.msgResponses.length === 0) {
+			return null
+		}
+
 		const msgResponse = txMsgData.msgResponses[0]
+		if (!msgResponse.typeUrl?.includes('MsgEthereumTxResponse')) {
+			return null
+		}
 		const MsgEthereumTxResponse = root.lookupType('cosmos.evm.vm.v1.MsgEthereumTxResponse')
 		const response = MsgEthereumTxResponse.decode(msgResponse.value) as any
 
@@ -256,15 +263,18 @@ async function processBatch(pool: pg.Pool, root: protobuf.Root): Promise<number>
 
 		for (const row of pending.rows) {
 			const { tx_id, raw_bytes, gas_used, height } = row
+			const gasUsed = gas_used === null || gas_used === undefined ? null : Number(gas_used)
 
-			const decoded = decodeTransaction(raw_bytes, tx_id, gas_used)
+			const decoded = decodeTransaction(raw_bytes, tx_id, gasUsed)
 			if (!decoded) {
-				// Insert placeholder to prevent infinite retry on decode failures
+				// Insert a placeholder so the row leaves evm_pending_decode and is not
+				// retried forever. NOT NULL columns get zero values; status -1 marks it.
 				await client.query(
-					`INSERT INTO api.evm_transactions (tx_id, hash, "from", status)
-					 VALUES ($1, $2, '', -1)
+					`INSERT INTO api.evm_transactions
+					   (tx_id, hash, "from", nonce, gas_limit, gas_price, value, status)
+					 VALUES ($1, $2, '', 0, 0, 0, 0, -1)
 					 ON CONFLICT (tx_id) DO NOTHING`,
-					[tx_id, `decode_failed_${tx_id.slice(0, 16)}`]
+					[tx_id, `decode_failed_${tx_id}`]
 				)
 				continue
 			}

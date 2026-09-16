@@ -123,8 +123,9 @@ seed_chain_features() {
     info "Advertising chain features: ${CHAIN_FEATURES}"
     local pg_array
     pg_array="{$(echo "$CHAIN_FEATURES" | tr -d ' ')}"
-    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c \
-        "INSERT INTO api.chain_features (chain_id, features) VALUES ('${CHAIN_ID}', '${pg_array}'::text[]) ON CONFLICT (chain_id) DO UPDATE SET features = EXCLUDED.features;"
+    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
+        -v cid="$CHAIN_ID" -v feats="$pg_array" \
+        -c "INSERT INTO api.chain_features (chain_id, features) VALUES (:'cid', :'feats'::text[]) ON CONFLICT (chain_id) DO UPDATE SET features = EXCLUDED.features;"
     success "Chain features seeded for ${CHAIN_ID}"
 }
 
@@ -219,6 +220,7 @@ enable_services() {
 }
 
 start_services() {
+    source_config
     info "Starting services..."
     systemctl restart yaci-chain-params
     sleep 2
@@ -226,6 +228,12 @@ start_services() {
         success "Chain params daemon started"
     else
         error "Chain params daemon failed to start. Check: journalctl -u yaci-chain-params -n 50"
+    fi
+
+    # EVM workers only for networks advertising the 'evm' feature.
+    if has_feature evm; then
+        systemctl start yaci-evm-decode yaci-evm-priority 2>/dev/null || true
+        success "EVM worker services started"
     fi
 }
 
@@ -448,6 +456,9 @@ deploy_from_git() {
 
     # Run migrations
     run_migrations
+
+    # Ensure the right systemd units are enabled for this chain's features
+    enable_services
 
     # Restart services
     start_services
