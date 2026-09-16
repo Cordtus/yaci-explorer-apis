@@ -1,6 +1,8 @@
 BEGIN;
 
 -- Daily transaction statistics
+DROP MATERIALIZED VIEW IF EXISTS api.mv_daily_tx_stats CASCADE;
+
 CREATE MATERIALIZED VIEW api.mv_daily_tx_stats AS
 WITH daily_txs AS (
 	SELECT
@@ -31,6 +33,8 @@ LEFT JOIN daily_senders ds ON ds.date = dt.date;
 CREATE UNIQUE INDEX mv_daily_tx_stats_date_idx ON api.mv_daily_tx_stats(date);
 
 -- Hourly transaction statistics for last 7 days
+DROP MATERIALIZED VIEW IF EXISTS api.mv_hourly_tx_stats CASCADE;
+
 CREATE MATERIALIZED VIEW api.mv_hourly_tx_stats AS
 SELECT
 	date_trunc('hour', timestamp) AS hour,
@@ -42,6 +46,8 @@ GROUP BY date_trunc('hour', timestamp);
 CREATE UNIQUE INDEX mv_hourly_tx_stats_hour_idx ON api.mv_hourly_tx_stats(hour);
 
 -- Message type distribution
+DROP MATERIALIZED VIEW IF EXISTS api.mv_message_type_stats CASCADE;
+
 CREATE MATERIALIZED VIEW api.mv_message_type_stats AS
 WITH totals AS (
 	SELECT COUNT(*)::numeric AS total

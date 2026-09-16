@@ -11,6 +11,8 @@ BEGIN;
 -- Fix validator_stats view
 -- ============================================================================
 
+DROP VIEW IF EXISTS api.validator_stats CASCADE;
+
 CREATE OR REPLACE VIEW api.validator_stats AS
 SELECT
   (SELECT COUNT(*) FROM api.validators) AS total_validators,
@@ -21,6 +23,8 @@ SELECT
 -- ============================================================================
 -- Fix chain_stats view
 -- ============================================================================
+
+DROP VIEW IF EXISTS api.chain_stats CASCADE;
 
 CREATE OR REPLACE VIEW api.chain_stats AS
 SELECT

@@ -218,7 +218,11 @@ JOIN api.blocks_raw b ON b.id = vr.height
 WHERE vr.rewards > 0 OR vr.commission > 0
 GROUP BY date_trunc('day', (b.data->'block'->'header'->>'time')::timestamptz)::date;
 
-CREATE UNIQUE INDEX IF NOT EXISTS mv_daily_rewards_date_idx ON api.mv_daily_rewards(date);
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_matviews WHERE schemaname = 'api' AND matviewname = 'mv_daily_rewards') THEN
+    EXECUTE 'CREATE UNIQUE INDEX IF NOT EXISTS mv_daily_rewards_date_idx ON api.mv_daily_rewards(date)';
+  END IF;
+END $$;
 
 -- ============================================================================
 -- Materialized View: Validator leaderboard
@@ -257,12 +261,17 @@ LEFT JOIN (
 ) j ON j.operator_address = v.operator_address
 WHERE v.status = 'BOND_STATUS_BONDED';
 
-CREATE UNIQUE INDEX IF NOT EXISTS mv_validator_leaderboard_operator_idx
-ON api.mv_validator_leaderboard(operator_address);
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_matviews WHERE schemaname = 'api' AND matviewname = 'mv_validator_leaderboard') THEN
+    EXECUTE 'CREATE UNIQUE INDEX IF NOT EXISTS mv_validator_leaderboard_operator_idx ON api.mv_validator_leaderboard(operator_address)';
+  END IF;
+END $$;
 
 -- ============================================================================
 -- Function: Get network overview stats
 -- ============================================================================
+
+DROP FUNCTION IF EXISTS api.get_network_overview();
 
 CREATE OR REPLACE FUNCTION api.get_network_overview()
 RETURNS TABLE (
@@ -314,6 +323,8 @@ $$ LANGUAGE plpgsql STABLE;
 -- ============================================================================
 -- Function: Get hourly rewards chart data
 -- ============================================================================
+
+DROP FUNCTION IF EXISTS api.get_hourly_rewards(INTEGER);
 
 CREATE OR REPLACE FUNCTION api.get_hourly_rewards(
   _hours INTEGER DEFAULT 24

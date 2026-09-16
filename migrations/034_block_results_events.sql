@@ -184,6 +184,8 @@ $$ LANGUAGE plpgsql STABLE;
 -- Function: Get recent slashing/jailing events across all validators
 -- ============================================================================
 
+DROP FUNCTION IF EXISTS api.get_recent_validator_events(TEXT[], INTEGER, INTEGER);
+
 CREATE OR REPLACE FUNCTION api.get_recent_validator_events(
   _event_types TEXT[] DEFAULT ARRAY['slash', 'liveness', 'jail'],
   _limit INTEGER DEFAULT 50,

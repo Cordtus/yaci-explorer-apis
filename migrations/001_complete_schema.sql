@@ -267,6 +267,8 @@ CREATE TABLE IF NOT EXISTS api.denom_metadata (
 -- =============================================================================
 
 -- Chain statistics
+DROP VIEW IF EXISTS api.chain_stats CASCADE;
+
 CREATE OR REPLACE VIEW api.chain_stats AS
 SELECT
   (SELECT MAX(id) FROM api.blocks_raw) AS latest_block,
@@ -296,6 +298,8 @@ GROUP BY DATE_TRUNC('hour', timestamp)
 ORDER BY hour DESC;
 
 -- Message type distribution
+DROP VIEW IF EXISTS api.message_type_stats CASCADE;
+
 CREATE OR REPLACE VIEW api.message_type_stats AS
 SELECT
   type,

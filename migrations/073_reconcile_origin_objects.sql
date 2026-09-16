@@ -1161,6 +1161,13 @@ GRANT EXECUTE ON FUNCTION api.get_ibc_heatmap_data(text, text, text, text) TO we
 
 CREATE INDEX IF NOT EXISTS idx_tx_error_not_null ON api.transactions_main(id) WHERE error IS NOT NULL;
 
+-- denom_metadata is created by 001_complete_schema.sql without ibc_hash, so
+-- 015_add_denom_metadata.sql (CREATE TABLE IF NOT EXISTS) silently no-ops.
+-- chain-params-daemon writes this column.
+ALTER TABLE api.denom_metadata ADD COLUMN IF NOT EXISTS ibc_hash TEXT;
+
+GRANT SELECT ON api.ibc_channels TO web_anon;
+
 -- =============================================================================
 -- CHAIN FEATURES (capability advertisement for the frontend)
 -- =============================================================================

@@ -222,6 +222,8 @@ GRANT EXECUTE ON FUNCTION api.backfill_validator_consensus_addresses() TO web_an
 -- View: validators_with_consensus - joins validators with consensus addresses
 -- ============================================================================
 
+DROP VIEW IF EXISTS api.validators_with_consensus CASCADE;
+
 CREATE OR REPLACE VIEW api.validators_with_consensus AS
 SELECT
   v.*,

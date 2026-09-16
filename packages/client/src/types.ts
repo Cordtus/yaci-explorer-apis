@@ -33,7 +33,9 @@ export interface Transaction {
 }
 
 export interface TransactionDetail extends Transaction {
+	/** EVM-only; present only for networks advertising the `evm` chain feature. */
 	evm_data: EvmData | null
+	evm_logs: EvmLog[]
 	raw_data: unknown
 }
 
@@ -384,4 +386,34 @@ export interface ResolvedDenom {
 	source_chain: string | null
 	source_denom: string | null
 }
+
+// EVM types. Networks that do not advertise the `evm` chain feature return
+// empty `evm_data` / `evm_logs`; callers should gate EVM UI on that feature.
+
+export interface EvmLog {
+	logIndex: number
+	address: string
+	topics: string[]
+	data: string
+}
+
+export interface EvmToken {
+	address: string
+	name: string | null
+	symbol: string | null
+	decimals: number | null
+	type: 'ERC20' | 'ERC721' | 'ERC1155'
+	total_supply: string | null
+	verified: boolean
+}
+
+export interface EvmTokenTransfer {
+	tx_id: string
+	log_index: number
+	token_address: string
+	from_address: string
+	to_address: string
+	value: string
+}
+
 

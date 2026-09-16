@@ -10,7 +10,7 @@ primary_region = 'sjc'
   dockerfile = "docker/Dockerfile"
 
 [deploy]
-  release_command = "npx tsx scripts/run-migrations.ts"
+  release_command = "bun run scripts/run-migrations.ts"
 
 [env]
   PGRST_DB_ANON_ROLE = 'web_anon'
@@ -24,10 +24,10 @@ primary_region = 'sjc'
   CHAIN_GRPC_ENDPOINT = 'grpc.republicai.io:443'
 
 [processes]
-  app = "npx tsx scripts/api-gateway.ts"
-  worker = "npx tsx scripts/decode-evm-daemon.ts"
-  priority_decoder = "npx tsx scripts/decode-evm-single.ts"
-  validator_refresh = "npx tsx scripts/validator-refresh.ts"
+  app = "bun run scripts/api-gateway.ts"
+  worker = "bun run scripts/decode-evm-daemon.ts"
+  priority_decoder = "bun run scripts/decode-evm-single.ts"
+  validator_refresh = "bun run scripts/validator-refresh.ts"
 
 [http_service]
   internal_port = 3000

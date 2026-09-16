@@ -71,6 +71,13 @@ CHAIN_PARAMS_POLL_INTERVAL_MS=60000
 
 # EVM decoder polling interval (ms)
 POLL_INTERVAL_MS=5000
+
+# This deployment's chain id and the modules it serves (comma-separated).
+# Advertised to the frontend via api.chain_features so it can gate components,
+# and used to decide which worker services are enabled. An EVM network MUST
+# list 'evm'; non-EVM networks must not.
+CHAIN_ID=manifest-1
+CHAIN_FEATURES=evm,ibc
 EOF
         warning "Created ${CONFIG_DIR}/explorer-apis.env - PLEASE EDIT THIS FILE"
     else
@@ -79,14 +86,20 @@ EOF
     success "Configuration setup complete"
 }
 
+source_config() {
+    if [ -f "${CONFIG_DIR}/explorer-apis.env" ]; then
+        source "${CONFIG_DIR}/explorer-apis.env"
+    fi
+}
+
+has_feature() {
+    echo ",${CHAIN_FEATURES}," | grep -q ",$1,"
+}
+
 run_migrations() {
     info "Running database migrations..."
 
-    if [ -z "$DATABASE_URL" ]; then
-        if [ -f "${CONFIG_DIR}/explorer-apis.env" ]; then
-            source "${CONFIG_DIR}/explorer-apis.env"
-        fi
-    fi
+    source_config
 
     if [ -z "$DATABASE_URL" ]; then
         error "DATABASE_URL not set. Configure ${CONFIG_DIR}/explorer-apis.env first."
@@ -95,6 +108,24 @@ run_migrations() {
     cd "${INSTALL_DIR}"
     DATABASE_URL="$DATABASE_URL" ./scripts/migrate.sh
     success "Migrations complete"
+
+    seed_chain_features
+}
+
+seed_chain_features() {
+    source_config
+
+    if [ -z "$DATABASE_URL" ] || [ -z "$CHAIN_ID" ] || [ -z "$CHAIN_FEATURES" ]; then
+        warning "CHAIN_ID/CHAIN_FEATURES not set; skipping api.chain_features seed"
+        return
+    fi
+
+    info "Advertising chain features: ${CHAIN_FEATURES}"
+    local pg_array
+    pg_array="{$(echo "$CHAIN_FEATURES" | tr -d ' ')}"
+    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c \
+        "INSERT INTO api.chain_features (chain_id, features) VALUES ('${CHAIN_ID}', '${pg_array}'::text[]) ON CONFLICT (chain_id) DO UPDATE SET features = EXCLUDED.features;"
+    success "Chain features seeded for ${CHAIN_ID}"
 }
 
 install_services() {
@@ -174,12 +205,17 @@ EOF
 }
 
 enable_services() {
+    source_config
     info "Enabling services..."
     systemctl enable yaci-chain-params
-    # Only enable EVM services if needed
-    # systemctl enable yaci-evm-decode
-    # systemctl enable yaci-evm-priority
-    success "Services enabled"
+    # EVM workers only run for networks advertising the 'evm' feature.
+    if has_feature evm; then
+        systemctl enable yaci-evm-decode yaci-evm-priority
+        success "Services enabled (evm)"
+    else
+        info "No 'evm' feature; EVM worker services left disabled"
+        success "Services enabled"
+    fi
 }
 
 start_services() {

@@ -24,7 +24,6 @@
 		"bech32": "^2.0.0",
 		"ethers": "^6.15.0",
 		"pg": "^8.13.0",
-		"postgres": "^3.4.8",
 		"protobufjs": "^7.4.0"
 	},
 	"devDependencies": {

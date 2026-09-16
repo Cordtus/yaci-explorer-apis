@@ -355,6 +355,8 @@ $$;
 -- View: validator_stats
 -- ============================================================================
 
+DROP VIEW IF EXISTS api.validator_stats CASCADE;
+
 CREATE OR REPLACE VIEW api.validator_stats AS
 SELECT
   (SELECT COUNT(*) FROM api.validators) AS total_validators,

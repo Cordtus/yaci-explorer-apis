@@ -53,11 +53,11 @@ SELECT
     mr.data->>'validator_address',
     ''
   ) AS validator_address,
-  COALESCE(
+  NULLIF(COALESCE(
     mr.data->'value'->>'amount',
     mr.data->'selfDelegation'->>'amount',
     mr.data->'self_delegation'->>'amount'
-  ) AS amount,
+  ), '')::numeric AS amount,
   COALESCE(
     mr.data->'value'->>'denom',
     mr.data->'selfDelegation'->>'denom',
@@ -89,7 +89,7 @@ SELECT
   'DELEGATE' AS event_type,
   COALESCE(mr.data->>'delegatorAddress', mr.data->>'delegator_address', m.sender) AS delegator_address,
   COALESCE(mr.data->>'validatorAddress', mr.data->>'validator_address', '') AS validator_address,
-  COALESCE(mr.data->'amount'->>'amount', mr.data->'coin'->>'amount') AS amount,
+  NULLIF(COALESCE(mr.data->'amount'->>'amount', mr.data->'coin'->>'amount'), '')::numeric AS amount,
   COALESCE(mr.data->'amount'->>'denom', mr.data->'coin'->>'denom') AS denom,
   t.id AS tx_hash,
   t.height,
@@ -118,7 +118,7 @@ SELECT
   'UNDELEGATE' AS event_type,
   COALESCE(mr.data->>'delegatorAddress', mr.data->>'delegator_address', m.sender) AS delegator_address,
   COALESCE(mr.data->>'validatorAddress', mr.data->>'validator_address', '') AS validator_address,
-  COALESCE(mr.data->'amount'->>'amount', mr.data->'coin'->>'amount') AS amount,
+  NULLIF(COALESCE(mr.data->'amount'->>'amount', mr.data->'coin'->>'amount'), '')::numeric AS amount,
   COALESCE(mr.data->'amount'->>'denom', mr.data->'coin'->>'denom') AS denom,
   t.id AS tx_hash,
   t.height,
@@ -148,7 +148,7 @@ SELECT
   COALESCE(mr.data->>'delegatorAddress', mr.data->>'delegator_address', m.sender) AS delegator_address,
   COALESCE(mr.data->>'validatorDstAddress', mr.data->>'validator_dst_address', '') AS validator_address,
   COALESCE(mr.data->>'validatorSrcAddress', mr.data->>'validator_src_address', '') AS src_validator_address,
-  COALESCE(mr.data->'amount'->>'amount', mr.data->'coin'->>'amount') AS amount,
+  NULLIF(COALESCE(mr.data->'amount'->>'amount', mr.data->'coin'->>'amount'), '')::numeric AS amount,
   COALESCE(mr.data->'amount'->>'denom', mr.data->'coin'->>'denom') AS denom,
   t.id AS tx_hash,
   t.height,

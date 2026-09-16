@@ -213,6 +213,8 @@ $$;
 -- UPDATE: chain_stats view to include EVM addresses and mentions
 -- =============================================================================
 
+DROP VIEW IF EXISTS api.chain_stats CASCADE;
+
 CREATE OR REPLACE VIEW api.chain_stats AS
 SELECT
   (SELECT MAX(id) FROM api.blocks_raw) AS latest_block,

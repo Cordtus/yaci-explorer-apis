@@ -22,6 +22,8 @@ BEGIN;
 
 DROP VIEW IF EXISTS api.chain_stats CASCADE;
 
+DROP MATERIALIZED VIEW IF EXISTS api.mv_chain_stats CASCADE;
+
 CREATE MATERIALIZED VIEW api.mv_chain_stats AS
 SELECT
   (SELECT MAX(id) FROM api.blocks_raw) AS latest_block,
@@ -61,6 +63,8 @@ GRANT SELECT ON api.mv_chain_stats TO web_anon;
 -- 2. Materialized View: network_overview
 --    Replaces the function that runs 10+ subqueries per call
 -- ============================================================================
+
+DROP MATERIALIZED VIEW IF EXISTS api.mv_network_overview CASCADE;
 
 CREATE MATERIALIZED VIEW api.mv_network_overview AS
 SELECT
@@ -137,6 +141,8 @@ GRANT EXECUTE ON FUNCTION api.get_network_overview() TO web_anon;
 -- 3. Materialized View: hourly_rewards
 --    Pre-computes the hourly rewards aggregation (last 48h for chart data)
 -- ============================================================================
+
+DROP MATERIALIZED VIEW IF EXISTS api.mv_hourly_rewards CASCADE;
 
 CREATE MATERIALIZED VIEW api.mv_hourly_rewards AS
 SELECT
@@ -241,6 +247,8 @@ $$ LANGUAGE plpgsql;
 
 -- Ensure validator_stats view still exists with all columns (including inactive_validators from 045)
 DROP VIEW IF EXISTS api.validator_stats;
+
+DROP VIEW IF EXISTS api.validator_stats CASCADE;
 
 CREATE VIEW api.validator_stats AS
 SELECT

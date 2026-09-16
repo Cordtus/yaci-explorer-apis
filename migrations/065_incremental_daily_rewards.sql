@@ -71,7 +71,15 @@ CREATE TRIGGER trg_rt_daily_rewards
 -- 4. Backward-compatible view so PostgREST clients still query mv_daily_rewards
 -- ============================================================================
 
-DROP MATERIALIZED VIEW IF EXISTS api.mv_daily_rewards CASCADE;
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_matviews WHERE schemaname = 'api' AND matviewname = 'mv_daily_rewards') THEN
+    DROP MATERIALIZED VIEW api.mv_daily_rewards CASCADE;
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_views WHERE schemaname = 'api' AND viewname = 'mv_daily_rewards') THEN
+    DROP VIEW api.mv_daily_rewards CASCADE;
+  END IF;
+END $$;
 
 CREATE OR REPLACE VIEW api.mv_daily_rewards AS
 SELECT

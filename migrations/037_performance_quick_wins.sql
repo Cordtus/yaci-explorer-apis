@@ -22,17 +22,21 @@ CREATE INDEX IF NOT EXISTS idx_events_main_id_type_key
 -- - Enables proper numeric comparisons without cast
 -- ============================================================================
 
--- Add new NUMERIC column
-ALTER TABLE api.delegation_events ADD COLUMN IF NOT EXISTS amount_numeric NUMERIC;
-
--- Migrate data from TEXT to NUMERIC
-UPDATE api.delegation_events
-SET amount_numeric = NULLIF(amount, '')::NUMERIC
-WHERE amount_numeric IS NULL AND amount IS NOT NULL AND amount != '';
-
--- Drop old column and rename new one
-ALTER TABLE api.delegation_events DROP COLUMN IF EXISTS amount;
-ALTER TABLE api.delegation_events RENAME COLUMN amount_numeric TO amount;
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'api' AND table_name = 'delegation_events'
+      AND column_name = 'amount' AND data_type <> 'numeric'
+  ) THEN
+    ALTER TABLE api.delegation_events ADD COLUMN IF NOT EXISTS amount_numeric NUMERIC;
+    UPDATE api.delegation_events
+      SET amount_numeric = NULLIF(amount::text, '')::NUMERIC
+      WHERE amount_numeric IS NULL AND amount IS NOT NULL AND amount::text <> '';
+    ALTER TABLE api.delegation_events DROP COLUMN IF EXISTS amount;
+    ALTER TABLE api.delegation_events RENAME COLUMN amount_numeric TO amount;
+  END IF;
+END $$;
 
 -- ============================================================================
 -- 3. Optimize get_delegator_stats() to use single table scan
