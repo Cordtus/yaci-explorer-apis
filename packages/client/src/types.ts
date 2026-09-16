@@ -21,7 +21,7 @@ export interface PaginatedResponse<T> {
 
 export interface Transaction {
 	id: string
-	fee: TransactionFee | null
+	fee: TransactionFee
 	memo: string | null
 	error: string | null
 	height: number
@@ -33,6 +33,7 @@ export interface Transaction {
 }
 
 export interface TransactionDetail extends Transaction {
+	/** EVM-only; present only for networks advertising the `evm` chain feature. */
 	evm_data: EvmData | null
 	evm_logs: EvmLog[]
 	raw_data: unknown
@@ -58,7 +59,6 @@ export interface Message {
 	sender: string | null
 	mentions: string[]
 	metadata: Record<string, unknown>
-	data?: Record<string, unknown>
 }
 
 // Events
@@ -76,29 +76,10 @@ export interface Event {
 // EVM
 
 export interface EvmData {
-	hash: string
-	from: string
-	to: string | null
-	nonce: number
-	gasLimit: string
-	gasPrice: string
-	maxFeePerGas: string | null
-	maxPriorityFeePerGas: string | null
-	value: string
-	data: string | null
-	type: number
-	chainId: string | null
-	gasUsed: number | null
-	status: number
-	functionName: string | null
-	functionSignature: string | null
-}
-
-export interface EvmLog {
-	logIndex: number
-	address: string
-	topics: string[]
-	data: string
+	ethereum_tx_hash: string | null
+	recipient: string | null
+	gas_used: number | null
+	tx_type: number | null
 }
 
 // Address
@@ -108,6 +89,8 @@ export interface AddressStats {
 	transaction_count: number
 	first_seen: string | null
 	last_seen: string | null
+	total_sent: number
+	total_received: number
 }
 
 // Chain Stats
@@ -116,7 +99,9 @@ export interface ChainStats {
 	latest_block: number
 	total_transactions: number
 	unique_addresses: number
-	evm_transactions: number
+	avg_block_time: number
+	min_block_time: number
+	max_block_time: number
 	active_validators: number
 }
 
@@ -172,7 +157,6 @@ export interface GovernanceProposal {
 		no_with_veto: string | null
 	}
 	last_updated: string
-	last_snapshot_time: string | null
 }
 
 export interface ProposalSnapshot {
@@ -185,28 +169,111 @@ export interface ProposalSnapshot {
 	snapshot_time: string
 }
 
-// Token types
+// Delegation Events
 
-export interface EvmToken {
-	address: string
-	name: string | null
-	symbol: string | null
-	decimals: number | null
-	type: 'ERC20' | 'ERC721' | 'ERC1155'
-	total_supply: string | null
-	verified: boolean
+export interface DelegationEvent {
+	id: string
+	tx_hash: string
+	event_type: 'DELEGATE' | 'UNDELEGATE' | 'REDELEGATE' | 'CREATE_VALIDATOR'
+	delegator_address: string
+	validator_address: string
+	src_validator_address: string | null
+	amount: string | null
+	denom: string | null
+	timestamp: string | null
+	block_height: number | null
+	validator_moniker?: string | null
 }
 
-export interface EvmTokenTransfer {
-	tx_id: string
-	log_index: number
-	token_address: string
-	from_address: string
-	to_address: string
-	value: string
+export interface DelegatorDelegation {
+	validator_address: string
+	validator_moniker: string | null
+	commission_rate: string | null
+	validator_status: string | null
+	validator_jailed: boolean | null
+	denom: string | null
+	total_delegated: string
 }
 
-// IBC Types
+export interface DelegatorDelegationsResponse {
+	delegations: DelegatorDelegation[]
+	total_staked: string
+	validator_count: number
+}
+
+export interface DelegatorStats {
+	total_delegations: number
+	total_undelegations: number
+	total_redelegations: number
+	first_delegation: string | null
+	last_activity: string | null
+	unique_validators: number
+}
+
+// Analytics
+
+export interface NetworkOverview {
+	total_validators: number
+	active_validators: number
+	jailed_validators: number
+	total_bonded_tokens: string
+	total_rewards_24h: string
+	total_commission_24h: string
+	avg_block_time: number
+	total_transactions: number
+	unique_addresses: number
+}
+
+export interface ValidatorRewardsHistory {
+	height: number
+	rewards: string
+	commission: string
+	block_time: string | null
+}
+
+export interface ValidatorTotalRewards {
+	total_rewards: string
+	total_commission: string
+	blocks_with_rewards: number
+}
+
+export interface HourlyRewards {
+	hour: string
+	rewards: string
+	commission: string
+}
+
+export interface ValidatorPerformance {
+	uptime_percentage: number
+	blocks_signed: number
+	blocks_missed: number
+	total_jailing_events: number
+	last_jailed_height: number | null
+	rewards_rank: number | null
+	delegation_rank: number | null
+}
+
+export interface ValidatorLeaderboardEntry {
+	operator_address: string
+	moniker: string
+	tokens: string
+	commission_rate: string
+	jailed: boolean
+	delegator_count: number
+	lifetime_rewards: string
+	lifetime_commission: string
+	jail_count: number
+	last_jailed_height: number | null
+}
+
+export interface ValidatorEventSummary {
+	height: number
+	event_type: string
+	validator_moniker: string | null
+	operator_address: string | null
+	details: Record<string, string>
+	block_time: string | null
+}
 
 export interface IbcStats {
 	outgoing_transfers: number
@@ -234,15 +301,6 @@ export interface IbcTransfer {
 	resolved_denom: ResolvedDenom | null
 	counterparty_chain: string | null
 	success: boolean
-}
-
-export interface ResolvedDenom {
-	denom: string
-	symbol: string
-	decimals: number
-	is_native: boolean | null
-	source_chain: string | null
-	source_denom: string | null
 }
 
 export interface IbcConnection {
@@ -319,3 +377,43 @@ export interface IbcVolumeTimeSeries {
 	}>
 	channels: string[]
 }
+
+export interface ResolvedDenom {
+	denom: string
+	symbol: string
+	decimals: number
+	is_native: boolean | null
+	source_chain: string | null
+	source_denom: string | null
+}
+
+// EVM types. Networks that do not advertise the `evm` chain feature return
+// empty `evm_data` / `evm_logs`; callers should gate EVM UI on that feature.
+
+export interface EvmLog {
+	logIndex: number
+	address: string
+	topics: string[]
+	data: string
+}
+
+export interface EvmToken {
+	address: string
+	name: string | null
+	symbol: string | null
+	decimals: number | null
+	type: 'ERC20' | 'ERC721' | 'ERC1155'
+	total_supply: string | null
+	verified: boolean | null
+}
+
+export interface EvmTokenTransfer {
+	tx_id: string
+	log_index: number
+	token_address: string
+	from_address: string
+	to_address: string
+	value: string
+}
+
+

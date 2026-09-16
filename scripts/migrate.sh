@@ -23,7 +23,7 @@ for file in "$MIGRATIONS_DIR"/*.sql; do
 	if [[ -f "$file" ]]; then
 		echo "Applying: $(basename "$file")"
 		if [[ "$DRY_RUN" == "false" ]]; then
-			psql "$DATABASE_URL" -f "$file"
+			psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$file"
 		fi
 	fi
 done

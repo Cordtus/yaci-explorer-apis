@@ -12,6 +12,16 @@ import type {
 	SearchResult,
 	GovernanceProposal,
 	ProposalSnapshot,
+	DelegationEvent,
+	DelegatorDelegationsResponse,
+	DelegatorStats,
+	NetworkOverview,
+	ValidatorRewardsHistory,
+	ValidatorTotalRewards,
+	HourlyRewards,
+	ValidatorPerformance,
+	ValidatorLeaderboardEntry,
+	ValidatorEventSummary,
 	IbcStats,
 	IbcTransfer,
 	IbcConnection,
@@ -189,13 +199,6 @@ export class YaciClient {
 	}
 
 	/**
-	 * Get daily active addresses (unique senders per day)
-	 */
-	async getDailyActiveAddresses(limit = 30): Promise<Array<{ date: string; active_addresses: number }>> {
-		return this.query('daily_active_addresses', { order: 'date.desc', limit: String(limit) })
-	}
-
-	/**
 	 * Get message type statistics
 	 */
 	async getMessageTypeStats(): Promise<Array<{ type: string; count: number }>> {
@@ -237,6 +240,182 @@ export class YaciClient {
 			proposal_id: `eq.${proposalId}`,
 			order: 'snapshot_time.desc'
 		})
+	}
+
+	// Delegator endpoints
+
+	/**
+	 * Get delegation history for a specific delegator address
+	 * @param delegatorAddress - The delegator's address (Cosmos bech32 format)
+	 * @param limit - Max results per page (default 50)
+	 * @param offset - Pagination offset (default 0)
+	 * @param eventType - Optional filter by event type
+	 */
+	async getDelegatorHistory(
+		delegatorAddress: string,
+		limit = 50,
+		offset = 0,
+		eventType?: 'DELEGATE' | 'UNDELEGATE' | 'REDELEGATE' | 'CREATE_VALIDATOR'
+	): Promise<PaginatedResponse<DelegationEvent>> {
+		return this.rpc('get_delegator_history', {
+			_delegator_address: delegatorAddress,
+			_limit: limit,
+			_offset: offset,
+			_event_type: eventType
+		})
+	}
+
+	/**
+	 * Get current delegations for a delegator (aggregated by validator)
+	 * @param delegatorAddress - The delegator's address (Cosmos bech32 format)
+	 */
+	async getDelegatorDelegations(delegatorAddress: string): Promise<DelegatorDelegationsResponse> {
+		return this.rpc('get_delegator_delegations', {
+			_delegator_address: delegatorAddress
+		})
+	}
+
+	/**
+	 * Get delegation statistics for a delegator
+	 * @param delegatorAddress - The delegator's address (Cosmos bech32 format)
+	 */
+	async getDelegatorStats(delegatorAddress: string): Promise<DelegatorStats> {
+		return this.rpc('get_delegator_stats', {
+			_delegator_address: delegatorAddress
+		})
+	}
+
+	/**
+	 * Get delegation history between a delegator and specific validator
+	 * @param delegatorAddress - The delegator's address (Cosmos bech32 format)
+	 * @param validatorAddress - The validator's operator address
+	 * @param limit - Max results per page (default 50)
+	 * @param offset - Pagination offset (default 0)
+	 */
+	async getDelegatorValidatorHistory(
+		delegatorAddress: string,
+		validatorAddress: string,
+		limit = 50,
+		offset = 0
+	): Promise<PaginatedResponse<DelegationEvent>> {
+		return this.rpc('get_delegator_validator_history', {
+			_delegator_address: delegatorAddress,
+			_validator_address: validatorAddress,
+			_limit: limit,
+			_offset: offset
+		})
+	}
+
+	// Analytics endpoints
+
+	/**
+	 * Get comprehensive network overview statistics
+	 * Includes validators, rewards, transactions, and addresses
+	 */
+	async getNetworkOverview(): Promise<NetworkOverview> {
+		const result = await this.rpc<NetworkOverview[]>('get_network_overview')
+		return result[0]
+	}
+
+	/**
+	 * Get validator rewards history (rewards and commission per block)
+	 * @param operatorAddress - Validator operator address
+	 * @param limit - Max results (default 100)
+	 * @param offset - Pagination offset (default 0)
+	 */
+	async getValidatorRewardsHistory(
+		operatorAddress: string,
+		limit = 100,
+		offset = 0
+	): Promise<ValidatorRewardsHistory[]> {
+		return this.rpc('get_validator_rewards_history', {
+			_operator_address: operatorAddress,
+			_limit: limit,
+			_offset: offset
+		})
+	}
+
+	/**
+	 * Get validator lifetime rewards totals
+	 * @param operatorAddress - Validator operator address
+	 */
+	async getValidatorTotalRewards(operatorAddress: string): Promise<ValidatorTotalRewards> {
+		const result = await this.rpc<ValidatorTotalRewards[]>('get_validator_total_rewards', {
+			_operator_address: operatorAddress
+		})
+		return result[0]
+	}
+
+	/**
+	 * Get hourly rewards aggregation for charts
+	 * @param hours - Number of hours to look back (default 24)
+	 */
+	async getHourlyRewards(hours = 24): Promise<HourlyRewards[]> {
+		return this.rpc('get_hourly_rewards', {
+			_hours: hours
+		})
+	}
+
+	/**
+	 * Get validator performance metrics
+	 * Includes uptime, missed blocks, jailing events, and rankings
+	 * @param operatorAddress - Validator operator address
+	 */
+	async getValidatorPerformance(operatorAddress: string): Promise<ValidatorPerformance> {
+		const result = await this.rpc<ValidatorPerformance[]>('get_validator_performance', {
+			_operator_address: operatorAddress
+		})
+		return result[0]
+	}
+
+	/**
+	 * Get validator leaderboard from materialized view
+	 * Sorted by tokens/voting power by default
+	 */
+	async getValidatorLeaderboard(): Promise<ValidatorLeaderboardEntry[]> {
+		return this.query('mv_validator_leaderboard', {
+			order: 'tokens.desc'
+		})
+	}
+
+	/**
+	 * Get recent validator events summary (slashing, jailing, rewards)
+	 * @param limit - Max events to return (default 20)
+	 */
+	async getValidatorEventsSummary(limit = 20): Promise<ValidatorEventSummary[]> {
+		return this.rpc('get_validator_events_summary', {
+			_limit: limit
+		})
+	}
+
+	/**
+	 * Get daily rewards aggregation from materialized view
+	 * @param days - Number of days to look back (default 30)
+	 */
+	async getDailyRewards(days = 30): Promise<Array<{
+		date: string
+		total_rewards: string
+		total_commission: string
+		validators_earning: number
+	}>> {
+		return this.query('mv_daily_rewards', {
+			order: 'date.desc',
+			limit: String(days)
+		})
+	}
+
+	/**
+	 * Refresh all analytics materialized views
+	 * Call periodically to update cached analytics data
+	 */
+	async refreshAnalyticsViews(): Promise<void> {
+		await this.rpc('refresh_analytics_views')
+	}
+	/**
+	 * Get daily active addresses (unique senders per day)
+	 */
+	async getDailyActiveAddresses(limit = 30): Promise<Array<{ date: string; active_addresses: number }>> {
+		return this.query('daily_active_addresses', { order: 'date.desc', limit: String(limit) })
 	}
 
 	// IBC endpoints
@@ -363,6 +542,7 @@ export class YaciClient {
 			_channel: channel
 		})
 	}
+
 }
 
 /**

@@ -3,10 +3,13 @@
 node_modules/
 dist/
 
-# AI/development docs
+# Internal/development docs
 CLAUDE.md
 AGENTS.md
 .dev/
 .claude/
 .serena/
 .playwright-mcp/
+MIGRATION_PLAN.md
+TODO.md
+*.png

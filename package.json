@@ -11,15 +11,17 @@
 		"typecheck": "bun run --filter @yaci/client typecheck",
 		"migrate": "./scripts/migrate.sh",
 		"migrate:dry": "./scripts/migrate.sh --dry-run",
-		"decode:evm": "bun run scripts/decode-evm-daemon.ts",
-		"decode:priority": "bun run scripts/decode-evm-single.ts",
-		"chain-params": "bun run scripts/chain-params-daemon.ts"
+		"decode:evm": "bun run scripts/decode-evm.ts",
+		"decode:evm:daemon": "bun run scripts/decode-evm-daemon.ts",
+		"decode:evm:priority": "bun run scripts/decode-evm-single.ts",
+		"chain-params": "bun run scripts/chain-params-daemon.ts",
+		"backfill:evm": "bun run scripts/backfill-evm-contracts.ts",
+		"backfill:evm:logs": "bun run scripts/backfill-evm-logs.ts",
+		"test:evm-hash-lookup": "bun run scripts/test-evm-hash-lookup.ts"
 	},
 	"dependencies": {
-		"@cosmjs/proto-signing": "^0.37.0",
 		"@grpc/grpc-js": "^1.14.1",
-		"@grpc/proto-loader": "^0.8.0",
-		"cosmjs-types": "^0.11.0",
+		"bech32": "^2.0.0",
 		"ethers": "^6.15.0",
 		"pg": "^8.13.0",
 		"protobufjs": "^7.4.0"

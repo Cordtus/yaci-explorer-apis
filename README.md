@@ -1,204 +1,145 @@
 # YACI Explorer APIs
 
-Middleware layer for YACI Explorer providing optimized database access via PostgREST RPC functions.
+Middleware layer for the YACI Explorer blockchain explorer. Provides optimized database access, background workers, and a TypeScript client for the frontend.
 
 ## Architecture
 
 ```
-Blockchain -> YACI Indexer -> PostgreSQL -> PostgREST -> This Package -> Frontend
+Blockchain gRPC -> [yaci indexer] -> PostgreSQL raw tables
+                                         |
+                                    [triggers] -> parsed tables
+                                         |
+                                    [workers] -> EVM decoded tables
+                                         |
+                                    PostgREST -> [this package's client] -> Frontend
 ```
 
-This package provides:
-- SQL functions for optimized single-round-trip queries
-- Pre-aggregated analytics views and materialized views
-- Background workers for EVM transaction decoding
-- TypeScript client for frontend consumption
-- Database triggers for governance and IBC tracking
+### System Components
 
-## Components
+| Component | Repository | Purpose |
+|-----------|------------|---------|
+| **Indexer** | [yaci](https://github.com/Cordtus/yaci) | Go service: gRPC -> PostgreSQL raw tables |
+| **Middleware** (this repo) | yaci-explorer-apis | SQL functions, views, triggers, EVM workers, TypeScript client |
+| **Frontend** | [yaci-explorer](https://github.com/Cordtus/yaci-explorer) | React UI consuming PostgREST via the client |
 
-### SQL Migrations (`/migrations`)
+## What This Package Provides
 
-Database functions and views that PostgREST exposes as RPC endpoints.
+- **SQL functions** for single-round-trip queries (no N+1 patterns)
+- **Database triggers** for parsing raw indexed data into structured tables
+- **Materialized views** for pre-aggregated analytics with zero-downtime refresh
+- **EVM decode workers** for decoding Ethereum transactions, logs, and tokens
+- **Chain params daemon** for IBC denom resolution and chain parameter tracking
+- **Reactive updates** via pg_notify for real-time validator state changes
+- **TypeScript client** (`@yaci/client`) for typed frontend access
 
-**Core Functions:**
-- `get_transactions_by_address()` - Paginated address transactions
-- `get_address_stats()` - Address activity statistics
+## Directory Structure
+
+```
+migrations/          SQL schema, functions, views, triggers (001-053)
+packages/client/     TypeScript client - thin RPC wrappers, zero deps
+scripts/             Migration runner, EVM decode daemons, utilities
+docker/              Dockerfile for multi-process deployment
+docs/                API reference documentation
+.github/workflows/   CI/CD (build validates, deploy deploys)
+```
+
+## Commands
+
+```bash
+bun install                     # Install dependencies
+bun run build                   # Build client package (@yaci/client)
+bun run typecheck               # Type check client (tsc --noEmit)
+bun run migrate                 # Run SQL migrations
+bun run migrate:dry             # Dry run migrations (list files only)
+bun run decode:evm              # Run EVM decode daemon
+bun run decode:priority         # Run priority EVM decode listener
+bun run chain-params            # Run chain params daemon
+```
+
+## SQL Functions
+
+### Core Queries
 - `get_transaction_detail()` - Full transaction with messages, events, EVM data
 - `get_transactions_paginated()` - Filtered transaction listing
+- `get_transactions_by_address()` - Address transaction history
 - `get_blocks_paginated()` - Paginated block listing
-- `get_block_time_analysis()` - Block time statistics
-- `universal_search()` - Cross-entity search
+- `universal_search()` - Cross-entity search (blocks, txs, addresses)
+- `get_address_stats()` - Address activity statistics
 
-**Governance Functions:**
-- `get_governance_proposals()` - Paginated governance proposals
-- `compute_proposal_tally()` - Calculate proposal vote tallies
+### Validators & Staking
+- `get_validators_paginated()` - Validator list with filtering/sorting
+- `get_validator_detail()` - Full validator info with consensus address
+- `get_validators_with_signing_stats()` - Validators with uptime data
+- `get_validator_performance()` - Uptime, jailing events, rankings
+- `get_validator_signing_stats()` - Signing stats in configurable block window
+- `get_validator_total_rewards()` - Lifetime reward totals
+- `get_validator_rewards_history()` - Per-block reward history
+- `get_delegation_events()` - Delegation history for a validator
+- `get_delegator_history()` - Delegation history for a delegator
+- `get_delegator_delegations()` - Current delegations by validator
 
-**IBC Functions:**
-- `get_ibc_stats()` - IBC transfer and channel statistics
-- `get_ibc_transfers()` - Paginated IBC transfers with direction filter
-- `get_ibc_transfers_by_address()` - IBC transfers for specific address
-- `get_ibc_connections()` - IBC channels with filters
-- `get_ibc_connection()` - Single channel details
-- `get_ibc_denom_traces()` - IBC denom trace information
-- `resolve_ibc_denom()` - Resolve IBC denom to full trace
-- `resolve_denom()` - Resolve any denom (native or IBC)
-- `get_ibc_chains()` - List connected chains
-- `get_ibc_channel_activity()` - Transfer stats by channel
-- `get_ibc_volume_timeseries()` - Hourly volume data
-- `get_ibc_heatmap_data()` - IBC activity heatmap
+### Governance
+- `get_governance_proposals()` - Paginated proposals with status filter
+- `compute_proposal_tally()` - Recalculate vote tallies
 
-**Analytics Views:**
-- `chain_stats` - Overall chain statistics
-- `tx_volume_daily` - Daily transaction counts
-- `tx_volume_hourly` - Hourly transaction counts
-- `daily_active_addresses` - Unique active addresses per day
-- `message_type_stats` - Message type distribution
-- `tx_success_rate` - Success/failure rates
-- `fee_revenue` - Fee totals by denomination
-- `gas_usage_distribution` - Gas usage percentiles
+### Analytics
+- `get_network_overview()` - Comprehensive network statistics
+- `get_hourly_rewards()` - Hourly rewards aggregation
+- `refresh_analytics_views()` - Refresh all materialized views (CONCURRENTLY)
 
-**Materialized Views** (refreshed via `api.refresh_analytics_views()`):
-- `mv_daily_tx_stats` - Daily stats with unique senders
-- `mv_hourly_tx_stats` - Hourly stats for last 7 days
-- `mv_message_type_stats` - Message type percentages
+See [docs/API.md](./docs/API.md) for complete API reference.
 
-### Client Package (`/packages/client`)
+## Client Package
 
-TypeScript client that wraps PostgREST RPC calls:
+Located in `packages/client/`. Zero external dependencies, thin RPC wrappers with full TypeScript types.
 
 ```typescript
 import { createClient } from '@yaci/client'
 
 const client = createClient('https://api.example.com')
 
-// Address data
-const txs = await client.getTransactionsByAddress(address, 50, 0)
-const stats = await client.getAddressStats(address)
-
-// Transaction data
 const tx = await client.getTransaction(hash)
-const txList = await client.getTransactions(20, 0, { status: 'success' })
-
-// Block data
-const block = await client.getBlock(height)
-const blocks = await client.getBlocks(20, 0)
-
-// Search
-const results = await client.search('cosmos1...')
-
-// Analytics
-const chainStats = await client.getChainStats()
-const dailyVolume = await client.getTxVolumeDaily()
-const activeAddresses = await client.getDailyActiveAddresses(30)
-const messageTypes = await client.getMessageTypeStats()
-const successRate = await client.getTxSuccessRate()
-
-// Governance
-const proposals = await client.getGovernanceProposals(20, 0, 'VOTING')
-const snapshots = await client.getProposalSnapshots(proposalId)
-
-// IBC
-const ibcStats = await client.getIbcStats()
-const transfers = await client.getIbcTransfers(20, 0, 'outgoing')
-const addressTransfers = await client.getIbcTransfersByAddress(address)
-const connections = await client.getIbcConnections(50, 0, chainId)
-const connection = await client.getIbcConnection(channelId)
-const denomTraces = await client.getIbcDenomTraces(50, 0, baseDenom)
-const resolved = await client.resolveIbcDenom('ibc/ABC123...')
-const denomInfo = await client.resolveDenom('umfx')
-const chains = await client.getIbcChains()
-const channelActivity = await client.getIbcChannelActivity()
-const volumeTimeseries = await client.getIbcVolumeTimeseries(24, channelId)
-```
-
-**Key characteristics:**
-- No internal caching (use TanStack Query)
-- No client-side aggregation (database handles it)
-- No EVM decoding dependencies
-- Thin RPC wrappers only
-
-## Development
-
-### Prerequisites
-
-- Bun (latest)
-- PostgreSQL 15+ with YACI schema
-- PostgREST 12+
-
-### Setup
-
-```bash
-bun install
-bun run build
-```
-
-### Running Migrations
-
-```bash
-export DATABASE_URL="postgresql://user:pass@host:5432/db"
-bun run migrate
-
-# Dry run
-bun run migrate:dry
-```
-
-### Running Workers
-
-```bash
-# EVM decode daemon (batch processing)
-bun run decode:evm
-
-# Priority EVM decode (NOTIFY/LISTEN)
-bun run decode:priority
-
-# Chain params daemon (IBC/denom resolution)
-bun run chain-params
+const validators = await client.getValidatorLeaderboard()
+const overview = await client.getNetworkOverview()
 ```
 
 ## Deployment
 
 Deployed to Fly.io with three processes:
-- `app` - PostgREST API server (port 3000)
-- `worker` - EVM decode daemon (continuous batch processing)
-- `priority_decoder` - Priority EVM decode via NOTIFY/LISTEN
+
+| Process | Purpose | Memory |
+|---------|---------|--------|
+| `app` | PostgREST API server (port 3000) | 256MB |
+| `worker` | EVM decode daemon (batch processing) | 512MB |
+| `priority_decoder` | Priority EVM decode (NOTIFY/LISTEN) | 512MB |
 
 ```bash
 fly deploy
+fly secrets set PGRST_DB_URI="postgresql://..."
+fly secrets set DATABASE_URL="postgresql://..."
 ```
 
-Configuration in `fly.toml`. Required secrets:
-- `PGRST_DB_URI` - PostgREST connection string
-- `DATABASE_URL` - Worker connection string
+## Database Schema
 
-## Frontend Integration
+**Raw tables** (indexer): `blocks_raw`, `transactions_raw`
+**Intermediate** (triggers): `messages_raw`, `events_raw`, `messages_main`, `events_main`, `transactions_main`
+**Validators**: `validators`, `validator_block_signatures`, `validator_rewards`, `finalize_block_events`, `block_metrics`
+**EVM** (workers): `evm_transactions`, `evm_logs`, `evm_tokens`, `evm_token_transfers`, `evm_contracts`
+**Governance** (triggers): `governance_proposals`, `governance_snapshots`
+**Other**: `ibc_channels`, `denom_metadata`, `delegation_events`
 
-The frontend (yaci-explorer) imports the client directly:
+## Environment Variables
 
-```typescript
-import { createClient } from '../../yaci-explorer-apis/packages/client'
+| Variable | Used By | Description |
+|----------|---------|-------------|
+| `DATABASE_URL` | Workers | PostgreSQL connection for background processes |
+| `PGRST_DB_URI` | PostgREST | PostgreSQL connection for API server |
+| `PGRST_DB_ANON_ROLE` | PostgREST | Anonymous role (`web_anon`) |
+| `PGRST_DB_SCHEMAS` | PostgREST | Exposed schema (`api`) |
+| `POLL_INTERVAL_MS` | Workers | Polling interval (default: 5000) |
+| `BATCH_SIZE` | Workers | EVM decode batch size (default: 100) |
 
-const apiClient = createClient(import.meta.env.VITE_POSTGREST_URL)
-```
+## Related Documentation
 
-### TanStack Query Configuration
-
-Recommended settings for frontend:
-
-```typescript
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      staleTime: 10000,      // 10s
-      gcTime: 5 * 60 * 1000, // 5min
-      retry: 1
-    }
-  }
-})
-```
-
-## Related
-
-- [YACI Indexer](https://github.com/Cordtus/yaci) - Data ingestion
-- [YACI Explorer](https://github.com/Cordtus/yaci-explorer) - Frontend
-- [OPERATIONS.md](./OPERATIONS.md) - Deployment, backup, and troubleshooting
+- [API Reference](./docs/API.md) - Complete endpoint documentation
+- [Operations Guide](./OPERATIONS.md) - Deployment, backup, and troubleshooting

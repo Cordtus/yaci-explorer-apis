@@ -25,15 +25,97 @@ jobs:
       - name: Type check
         run: bun run typecheck
 
-      - name: Validate migrations
+  validate-migrations:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: yaci_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U test -d yaci_test"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate migration syntax
         run: |
           if [ -d "migrations" ]; then
-            echo "Checking migration files..."
+            echo "=== Validating migration files ==="
+            ERRORS=0
+
             for f in migrations/*.sql; do
               if [ -f "$f" ]; then
-                echo "Validating $f"
-                grep -q "BEGIN;" "$f" || echo "Warning: $f missing BEGIN"
-                grep -q "COMMIT;" "$f" || echo "Warning: $f missing COMMIT"
+                FILENAME=$(basename "$f")
+                echo "Checking $FILENAME..."
+
+                # Check for BEGIN/COMMIT transaction blocks
+                if ! grep -q "BEGIN;" "$f"; then
+                  echo "  ERROR: Missing BEGIN; statement"
+                  ERRORS=$((ERRORS + 1))
+                fi
+                if ! grep -q "COMMIT;" "$f"; then
+                  echo "  ERROR: Missing COMMIT; statement"
+                  ERRORS=$((ERRORS + 1))
+                fi
+
+                # Check filename follows numbering convention (NNN_description.sql)
+                if ! echo "$FILENAME" | grep -qE "^[0-9]{3}_.*\.sql$"; then
+                  echo "  WARNING: Filename should follow NNN_description.sql pattern"
+                fi
               fi
             done
+
+            if [ $ERRORS -gt 0 ]; then
+              echo ""
+              echo "=== VALIDATION FAILED: $ERRORS error(s) found ==="
+              exit 1
+            fi
+
+            echo ""
+            echo "=== Migration structure validation passed ==="
+          fi
+
+      - name: Setup database prerequisites
+        env:
+          DATABASE_URL: postgres://test:test@localhost:5432/yaci_test
+        run: |
+          echo "=== Setting up database prerequisites ==="
+          psql "$DATABASE_URL" -c "CREATE SCHEMA IF NOT EXISTS api;"
+          psql "$DATABASE_URL" -c "CREATE ROLE web_anon NOLOGIN;"
+          psql "$DATABASE_URL" -c "GRANT USAGE ON SCHEMA api TO web_anon;"
+          echo "=== Database prerequisites created ==="
+
+      - name: Dry-run migrations against test database
+        env:
+          DATABASE_URL: postgres://test:test@localhost:5432/yaci_test
+        run: |
+          if [ -d "migrations" ]; then
+            echo "=== Running migration dry-run against test database ==="
+
+            # Apply each migration file in order to verify SQL syntax
+            for f in migrations/*.sql; do
+              if [ -f "$f" ]; then
+                FILENAME=$(basename "$f")
+                echo "Applying $FILENAME..."
+
+                # Run the migration (will fail on syntax errors)
+                psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f"
+
+                if [ $? -ne 0 ]; then
+                  echo "FAILED: $FILENAME"
+                  exit 1
+                fi
+              fi
+            done
+
+            echo ""
+            echo "=== All migrations applied successfully to test database ==="
           fi
