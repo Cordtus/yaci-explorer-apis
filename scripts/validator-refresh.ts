@@ -1,4 +1,4 @@
-#!/usr/bin/env npx tsx
+#!/usr/bin/env bun
 /**
  * Validator Refresh Daemon (Event-Driven)
  *
@@ -12,8 +12,8 @@
  * C. Full sync safety net -- full validator set fetch on startup + periodic interval
  *
  * Environment:
- *   DATABASE_URL           - PostgreSQL connection string
- *   CHAIN_QUERY_URL        - chain-query-service base URL (default: https://yaci-explorer-apis.fly.dev)
+ *   DATABASE_URL           - PostgreSQL connection string (required)
+ *   CHAIN_QUERY_URL        - chain-query-service base URL (default: http://localhost:3000)
  *   DEBOUNCE_MS            - Batch window for NOTIFY events (default: 2000)
  *   MV_REFRESH_INTERVAL_MS - Materialized view refresh interval (default: 900000 = 15 min)
  *   FULL_SYNC_INTERVAL_MS  - Full validator sync interval (default: 21600000 = 6 hours)
@@ -22,8 +22,12 @@
 import pg from 'pg'
 const { Pool } = pg
 
-const DATABASE_URL = process.env.DATABASE_URL || 'postgres://postgres:bOqwmcryOQcdmrO@localhost:15432/postgres?sslmode=disable'
-const CHAIN_QUERY_URL = process.env.CHAIN_QUERY_URL || 'https://yaci-explorer-apis.fly.dev'
+const DATABASE_URL = process.env.DATABASE_URL
+if (!DATABASE_URL) {
+	console.error('ERROR: DATABASE_URL environment variable is required')
+	process.exit(1)
+}
+const CHAIN_QUERY_URL = process.env.CHAIN_QUERY_URL || 'http://localhost:3000'
 const DEBOUNCE_MS = parseInt(process.env.DEBOUNCE_MS || '2000', 10)
 const MV_REFRESH_INTERVAL_MS = parseInt(process.env.MV_REFRESH_INTERVAL_MS || '900000', 10)
 const FULL_SYNC_INTERVAL_MS = parseInt(process.env.FULL_SYNC_INTERVAL_MS || '21600000', 10)

@@ -37,10 +37,9 @@ Blockchain gRPC -> [yaci indexer] -> PostgreSQL raw tables
 ## Directory Structure
 
 ```
-migrations/          SQL schema, functions, views, triggers (000-074, incremental)
+migrations/          SQL schema - 001_schema.sql is the full current layout
 packages/client/     TypeScript client - thin RPC wrappers, zero deps
-scripts/             Migration runner, EVM decode daemons, utilities
-docker/              Dockerfile for multi-process deployment
+scripts/             Schema runner, EVM decode daemons, utilities
 docs/                API reference documentation
 .github/workflows/   CI/CD (build validates, deploy deploys)
 ```
@@ -108,7 +107,7 @@ const overview = await client.getNetworkOverview()
 ## Deployment
 
 Deployed to an LXD container (`yaci`) via `scripts/deploy.sh` (run by CI over SSH
-on pushes to `main`, not Fly.io):
+on pushes to `main`):
 
 ```bash
 lxc exec yaci -- /opt/yaci-explorer-apis/scripts/deploy.sh deploy main
@@ -120,6 +119,11 @@ from `CHAIN_ID`/`CHAIN_FEATURES`, and manages systemd services
 is advertised).
 
 ## Database Schema
+
+`migrations/001_schema.sql` is the complete current schema (tables, functions,
+views, triggers, grants) as a single idempotent file, so it can be applied to a
+fresh database or re-applied safely. Any future schema change goes in a new
+numbered file next to it.
 
 **Raw tables** (indexer): `blocks_raw`, `transactions_raw`
 **Intermediate** (triggers): `messages_raw`, `events_raw`, `messages_main`, `events_main`, `transactions_main`
@@ -142,4 +146,3 @@ is advertised).
 ## Related Documentation
 
 - [API Reference](./docs/API.md) - Complete endpoint documentation
-- [Operations Guide](./OPERATIONS.md) - Deployment, backup, and troubleshooting

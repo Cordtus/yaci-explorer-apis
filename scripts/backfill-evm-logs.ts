@@ -1,4 +1,4 @@
-#!/usr/bin/env npx tsx
+#!/usr/bin/env bun
 /**
  * Backfill EVM logs from existing transactions
  * Re-processes transactions_raw to extract logs that were missed

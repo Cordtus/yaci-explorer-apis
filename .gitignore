@@ -3,13 +3,17 @@
 node_modules/
 dist/
 
-# Internal/development docs
-CLAUDE.md
+# Internal/agent working files - not for the public repo
 AGENTS.md
+CLAUDE.md
+GEMINI.md
+TODO.md
 .dev/
 .claude/
+.codex/
+.cursor/
 .serena/
+.windsurf/
 .playwright-mcp/
 MIGRATION_PLAN.md
-TODO.md
 *.png
