@@ -2,7 +2,7 @@
  * Test script for EVM hash lookup functionality
  * Tests that get_transaction_detail can resolve both Cosmos and EVM tx hashes
  *
- * Usage: DATABASE_URL=... npx tsx scripts/test-evm-hash-lookup.ts
+ * Usage: DATABASE_URL=... bun run scripts/test-evm-hash-lookup.ts
  */
 
 import pg from "pg"

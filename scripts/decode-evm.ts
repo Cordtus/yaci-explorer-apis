@@ -1,9 +1,9 @@
-#!/usr/bin/env npx tsx
+#!/usr/bin/env bun
 /**
  * EVM Transaction Decoder Worker
  * Decodes raw EVM transaction bytes and logs, stores in domain tables
  *
- * Usage: npx tsx scripts/decode-evm.ts
+ * Usage: bun run scripts/decode-evm.ts
  *
  * Environment variables:
  *   DATABASE_URL - PostgreSQL connection string

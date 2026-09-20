@@ -1,136 +1,22 @@
 # Scripts
 
-## decode-evm.ts
+Run with Bun (`bun run scripts/<name>.ts`). All database scripts need
+`DATABASE_URL`; `package.json` has shortcuts for the common ones.
 
-EVM transaction decoder worker that extracts transaction data and logs from Yaci-indexed EVM transactions.
+| Script | Purpose |
+|--------|---------|
+| `decode-evm-daemon.ts` | EVM decode daemon (continuous polling) |
+| `decode-evm-single.ts` | Priority decoder, listens for `NOTIFY` from `api.request_evm_decode()` |
+| `decode-evm.ts` | One-shot EVM decode of the pending queue |
+| `chain-params-daemon.ts` | IBC denom traces and chain parameter resolution |
+| `chain-query-service.ts` | HTTP gRPC proxy: balances, staking, slashing, auth, tx broadcast |
+| `api-gateway.ts` | Routes `/chain/*` to the chain query service, everything else to PostgREST |
+| `validator-refresh.ts` | Event-driven validator refresh via `pg_notify` |
+| `backfill-evm-contracts.ts` | Backfill `evm_tokens` / `evm_token_transfers` from decoded logs |
+| `backfill-evm-logs.ts` | Re-extract EVM logs from `transactions_raw` |
+| `test-evm-hash-lookup.ts` | Verify `get_transaction_detail` resolves Cosmos and EVM hashes |
+| `migrate.sh` | Apply `migrations/*.sql` in order (`bun run migrate`) |
+| `deploy.sh` | LXD/systemd deploy entrypoint (see README) |
 
-### What It Does
-
-1. **Finds pending EVM transactions** - Queries `MsgEthereumTx` transactions that haven't been decoded
-2. **Decodes RLP transaction bytes** - Extracts from/to/value/nonce/gas/etc using ethers.js
-3. **Extracts logs from protobuf** - Decodes `MsgEthereumTxResponse` for log topics/data
-4. **Looks up function signatures** - Queries 4byte.directory for method names
-5. **Detects token transfers** - Identifies ERC-20 Transfer events and populates token tables
-
-### Requirements
-
-- Node.js 18+
-- PostgreSQL connection to Yaci database
-- Internet access for 4byte.directory API
-
-### Usage
-
-```bash
-# One-time decode
-DATABASE_URL="postgres://user:pass@host:5432/yaci" bun run decode:evm
-
-# With explicit config
-DATABASE_URL="postgres://..." bun run decode:evm
-```
-
-### Continuous Operation
-
-**Cron (simple)**:
-```bash
-*/5 * * * * cd /path/to/yaci-explorer-apis && DATABASE_URL="..." bun run decode:evm
-```
-
-**Systemd (recommended)**:
-```ini
-# /etc/systemd/system/evm-decode.timer
-[Timer]
-OnBootSec=1min
-OnUnitActiveSec=5min
-```
-
-### Data Flow
-
-```
-Yaci Indexer
-  ↓ (stores raw EVM bytes + tx response)
-messages_raw.data.raw (base64 RLP)
-transactions_raw.data.txResponse.data (protobuf)
-  ↓
-decode-evm.ts
-  ├─ Decode RLP → evm_transactions
-  ├─ Decode protobuf → evm_logs
-  ├─ Parse Transfer logs → evm_tokens, evm_token_transfers
-  └─ Lookup 4byte.directory → function_name, function_signature
-  ↓
-PostgREST API
-  ↓
-Frontend
-```
-
-### What Gets Decoded
-
-#### evm_transactions
-- Standard EVM fields (hash, from, to, nonce, gas, value, data, type)
-- Gas usage and status
-- Function name/signature (from 4byte.directory)
-
-#### evm_logs
-- Contract address
-- Topics array (event signature + indexed params)
-- Data (non-indexed params)
-
-#### evm_tokens (auto-detected)
-- ERC-20 tokens (from Transfer events)
-- First seen height/tx
-
-#### evm_token_transfers
-- Token address, from, to, value
-- Parsed from `Transfer(address,address,uint256)` logs
-
-### Performance
-
-- Processes 100 transactions per batch
-- ~500ms per transaction with 10 logs
-- 4byte.directory requests cached in memory
-- Uses database transactions for atomicity
-
-### Logs
-
-```
-EVM Transaction Decoder Worker
-==============================
-Database: postgres://***@***:5432/yaci
-Loading proto definitions...
-Connected to database
-Processing 10 pending EVM transactions...
-Decoded tx 488a71f3eb96... -> 0x8c5e4c1197a3... (3 logs)
-Decoded tx 7b2fa551a265... -> 0x4a1bc6d8e... (1 logs)
-
-Total decoded: 10 transactions
-```
-
-### Error Handling
-
-- Failed transactions are skipped, not blocking
-- Protobuf decode errors logged but don't stop batch
-- 4byte.directory failures cached as null (won't retry)
-- Database errors roll back per-transaction
-
-### Extending
-
-To add support for more token standards:
-
-1. Add event signature constants (e.g., ERC-721 Transfer)
-2. Create parsing function (similar to `parseTransferLog`)
-3. Handle in log processing loop
-4. Insert into appropriate tables
-
-Example:
-```typescript
-const ERC721_TRANSFER = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef'
-
-function parseERC721Transfer(log: DecodedLog) {
-  if (log.topics.length === 4) { // ERC-721 has tokenId as topic[3]
-    return {
-      from: '0x' + log.topics[1].slice(-40),
-      to: '0x' + log.topics[2].slice(-40),
-      tokenId: BigInt(log.topics[3]).toString()
-    }
-  }
-}
-```
+Environment variables are listed in the README. EVM metadata (token name,
+symbol, decimals) is only fetched when `EVM_RPC_URL` is set.

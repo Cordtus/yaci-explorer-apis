@@ -93,29 +93,30 @@ jobs:
           psql "$DATABASE_URL" -c "GRANT USAGE ON SCHEMA api TO web_anon;"
           echo "=== Database prerequisites created ==="
 
-      - name: Dry-run migrations against test database
+      - name: Apply migrations twice (idempotency check)
         env:
           DATABASE_URL: postgres://test:test@localhost:5432/yaci_test
         run: |
           if [ -d "migrations" ]; then
-            echo "=== Running migration dry-run against test database ==="
+            echo "=== Applying migrations to test database ==="
 
-            # Apply each migration file in order to verify SQL syntax
-            for f in migrations/*.sql; do
-              if [ -f "$f" ]; then
-                FILENAME=$(basename "$f")
-                echo "Applying $FILENAME..."
+            # Apply each file in order, twice, to verify syntax and idempotency
+            for pass in 1 2; do
+              for f in migrations/*.sql; do
+                if [ -f "$f" ]; then
+                  FILENAME=$(basename "$f")
+                  echo "Pass $pass: applying $FILENAME..."
 
-                # Run the migration (will fail on syntax errors)
-                psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f"
+                  psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f"
 
-                if [ $? -ne 0 ]; then
-                  echo "FAILED: $FILENAME"
-                  exit 1
+                  if [ $? -ne 0 ]; then
+                    echo "FAILED: $FILENAME (pass $pass)"
+                    exit 1
+                  fi
                 fi
-              fi
+              done
             done
 
             echo ""
-            echo "=== All migrations applied successfully to test database ==="
+            echo "=== All migrations applied successfully (twice) ==="
           fi

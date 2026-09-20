@@ -1,4 +1,4 @@
-#!/usr/bin/env npx tsx
+#!/usr/bin/env bun
 /**
  * Backfill EVM contracts from existing contract deployment transactions
  * Also backfills tokens from Transfer events in evm_logs
